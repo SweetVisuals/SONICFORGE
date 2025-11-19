@@ -1,0 +1,7 @@
+{
+  "name": "VST Architect - GenAI Plugin Builder",
+  "description": "A visual VST plugin generator where users can combine templates like EQ, Compressor, and Reverb, customize the GUI, preview real-time audio processing, and export generated JUCE C++ source code.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
