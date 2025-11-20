@@ -310,6 +310,7 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
     render();
     
     const handleMouseDown = (e: MouseEvent) => {
+        // Critical: Stop propagation to prevent parent draggable from activating
         e.stopPropagation();
         const rect = canvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
@@ -381,11 +382,10 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
   return (
     <div 
       ref={containerRef} 
-      className={`relative w-full bg-neutral-950 rounded-lg border shadow-xl overflow-hidden group transition-colors border-neutral-800`}
-      onDragStart={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-      }}
+      className={`relative w-full h-full bg-neutral-950 rounded-lg border shadow-xl overflow-hidden group transition-colors border-neutral-800`}
+      onMouseDown={(e) => e.stopPropagation()}
+      draggable={true}
+      onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
     >
       {isHybrid && (
           <div className="flex bg-[#0a0a0a] border-b border-white/5">
@@ -406,7 +406,7 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
           </div>
       )}
 
-      <div className="h-72 relative">
+      <div className="h-full relative">
         <canvas ref={canvasRef} className="w-full h-full cursor-crosshair" />
         
         <div className="absolute top-3 left-3 flex flex-col space-y-1 pointer-events-none opacity-50">

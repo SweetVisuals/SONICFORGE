@@ -10,7 +10,7 @@ interface KnobProps {
   unit?: string;
   color?: string;
   size?: number;
-  variant?: 'classic' | 'soft' | 'tech';
+  variant?: string; // 'classic' | 'soft' | 'tech' | 'cyber' | 'ring' | 'analog'
 }
 
 export const Knob: React.FC<KnobProps> = ({ 
@@ -22,11 +22,9 @@ export const Knob: React.FC<KnobProps> = ({
   const startY = useRef(0);
   const startValue = useRef(0);
 
-  // Ensure range clamping
   const clampedValue = Math.min(max, Math.max(min, value));
   const percentage = (clampedValue - min) / (max - min);
   
-  // -135 to 135 degrees
   const startAngle = -135;
   const endAngle = 135;
   const angleRange = endAngle - startAngle;
@@ -37,16 +35,13 @@ export const Knob: React.FC<KnobProps> = ({
       if (!isDragging) return;
       const deltaY = startY.current - e.clientY;
       const range = max - min;
-      // Sensitivity
       const deltaValue = (deltaY / 150) * range; 
       let newValue = startValue.current + deltaValue;
       newValue = Math.min(max, Math.max(min, newValue));
       
-      // Snap to 0 if close for bipolar params
       if (min < 0 && max > 0 && Math.abs(newValue) < range * 0.02) {
           newValue = 0;
       }
-      
       onChange(newValue);
     };
 
@@ -68,14 +63,13 @@ export const Knob: React.FC<KnobProps> = ({
   }, [isDragging, max, min, onChange]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    e.stopPropagation(); // Stop propagation to parent draggable
-    e.preventDefault(); // Prevent text selection or defaults
+    e.stopPropagation();
+    e.preventDefault();
     setIsDragging(true);
     startY.current = e.clientY;
     startValue.current = value;
   };
 
-  // Polar to Cartesian
   const polarToCartesian = (centerX: number, centerY: number, radius: number, angleInDegrees: number) => {
     const angleInRadians = (angleInDegrees - 90) * Math.PI / 180.0;
     return {
@@ -94,80 +88,109 @@ export const Knob: React.FC<KnobProps> = ({
       ].join(" ");
   }
 
-  const strokeWidth = variant === 'tech' ? 2 : size * 0.08;
-  const radius = (size / 2) - strokeWidth;
+  // Dimensions
   const cx = size / 2;
   const cy = size / 2;
-
-  // Inner knob size
-  const innerSize = variant === 'tech' ? size * 0.7 : size * 0.6;
+  
+  // Variant Configurations
+  let trackWidth = size * 0.08;
+  let trackRadius = (size / 2) - trackWidth;
+  let knobSize = size * 0.6;
+  
+  if (variant === 'ring') {
+      trackWidth = size * 0.08;
+      trackRadius = (size/2) - 4;
+      knobSize = size * 0.55;
+  } else if (variant === 'analog') {
+      trackWidth = 2;
+      trackRadius = (size / 2) - 6;
+      knobSize = size * 0.8;
+  } else if (variant === 'cyber') {
+      trackWidth = 4;
+      trackRadius = (size / 2) - 4;
+      knobSize = size * 0.7;
+  }
 
   return (
     <div className="flex flex-col items-center space-y-1 group">
       <div 
         ref={knobRef}
         onMouseDown={handleMouseDown}
-        onDragStart={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-        }}
+        onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
         className="relative cursor-ns-resize outline-none select-none transition-transform active:scale-95"
         style={{ width: size, height: size }}
       >
-        {/* Background Track */}
-        <svg width={size} height={size} className="absolute top-0 left-0 pointer-events-none">
-            {/* Shadow Circle */}
-            {variant !== 'tech' && (
-              <circle cx={cx} cy={cy} r={radius - 2} fill="#18181b" stroke="#27272a" strokeWidth={1} />
+        {/* SVG Layer for Arc */}
+        <svg width={size} height={size} className="absolute top-0 left-0 pointer-events-none overflow-visible">
+            {/* Track Background */}
+            {variant !== 'analog' && (
+                 <path 
+                    d={describeArc(cx, cy, trackRadius, startAngle, endAngle)} 
+                    fill="none" 
+                    stroke={variant === 'cyber' ? '#1a1a1a' : '#27272a'} 
+                    strokeWidth={trackWidth} 
+                    strokeLinecap="round"
+                />
             )}
-            
-            {/* Track Arc */}
-            <path 
-                d={describeArc(cx, cy, radius, startAngle, endAngle)} 
-                fill="none" 
-                stroke={variant === 'soft' ? '#27272a' : '#27272a'} 
-                strokeWidth={strokeWidth} 
-                strokeLinecap={variant === 'tech' ? 'butt' : 'round'}
-                strokeOpacity={variant === 'tech' ? 0.5 : 1}
-            />
-            
+
             {/* Value Arc */}
-            <path 
-                d={describeArc(cx, cy, radius, startAngle, currentAngle)} 
-                fill="none" 
-                stroke={color} 
-                strokeWidth={strokeWidth} 
-                strokeLinecap={variant === 'tech' ? 'butt' : 'round'}
-                className="drop-shadow-md transition-all duration-75"
-                style={{ filter: `drop-shadow(0 0 ${variant === 'tech' ? '4px' : '2px'} ${color})` }}
-            />
+            {variant !== 'analog' && (
+                <path 
+                    d={describeArc(cx, cy, trackRadius, startAngle, currentAngle)} 
+                    fill="none" 
+                    stroke={color} 
+                    strokeWidth={trackWidth} 
+                    strokeLinecap={variant === 'cyber' ? 'butt' : 'round'}
+                    className="transition-all duration-75"
+                    style={{ 
+                        filter: variant === 'cyber' || variant === 'ring' ? `drop-shadow(0 0 4px ${color})` : 'none',
+                        strokeOpacity: variant === 'tech' ? 0.5 : 1
+                    }}
+                />
+            )}
+
+            {/* Analog Ticks */}
+            {variant === 'analog' && (
+                 Array.from({ length: 11 }).map((_, i) => {
+                     const angle = startAngle + (i * (angleRange / 10));
+                     const pos1 = polarToCartesian(cx, cy, size/2, angle);
+                     const pos2 = polarToCartesian(cx, cy, size/2 - 4, angle);
+                     return (
+                         <line key={i} x1={pos1.x} y1={pos1.y} x2={pos2.x} y2={pos2.y} stroke="#52525b" strokeWidth={1} />
+                     )
+                 })
+            )}
         </svg>
         
-        {/* Inner Knob */}
+        {/* Knob Body */}
         <div 
-            className={`absolute rounded-full flex items-center justify-center
-              ${variant === 'soft' ? 'bg-zinc-800' : variant === 'tech' ? 'bg-black border border-white/10' : 'bg-gradient-to-b from-zinc-700 to-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.1),0_2px_4px_rgba(0,0,0,0.5)]'}
+            className={`absolute rounded-full flex items-center justify-center transition-shadow
+              ${variant === 'soft' ? 'bg-zinc-800' : ''}
+              ${variant === 'tech' ? 'bg-black border border-white/10' : ''}
+              ${variant === 'classic' ? 'bg-gradient-to-b from-zinc-700 to-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.1),0_2px_4px_rgba(0,0,0,0.5)]' : ''}
+              ${variant === 'ring' ? 'bg-[#09090b] border border-white/5 shadow-inner' : ''}
+              ${variant === 'cyber' ? 'bg-black border border-neutral-800' : ''}
+              ${variant === 'analog' ? 'bg-gradient-to-br from-neutral-200 to-neutral-400 shadow-[0_4px_8px_rgba(0,0,0,0.5),inset_0_2px_4px_rgba(255,255,255,0.5)]' : ''}
             `}
             style={{ 
-              width: innerSize, 
-              height: innerSize, 
-              left: (size - innerSize) / 2,
-              top: (size - innerSize) / 2,
+              width: knobSize, 
+              height: knobSize, 
+              left: (size - knobSize) / 2,
+              top: (size - knobSize) / 2,
               transform: `rotate(${currentAngle}deg)`
             }}
         >
              {/* Indicator */}
-            {variant === 'tech' ? (
-              <div className="w-1 h-1 rounded-full bg-white shadow-[0_0_5px_white]"></div>
+            {variant === 'tech' || variant === 'cyber' ? (
+              <div className="w-1 h-1 rounded-full" style={{ backgroundColor: color, boxShadow: `0 0 5px ${color}` }}></div>
+            ) : variant === 'ring' ? (
+               <div className="absolute top-1 w-1 h-1 rounded-full bg-white opacity-80"></div>
+            ) : variant === 'analog' ? (
+               <div className="absolute top-2 w-0.5 h-3 bg-black/60 rounded-full"></div>
             ) : (
               <div 
                 className={`absolute rounded-full ${variant === 'soft' ? 'bg-zinc-400' : 'bg-white shadow-[0_0_2px_rgba(255,255,255,0.5)]'}`}
-                style={{
-                  width: 2,
-                  height: innerSize * 0.3,
-                  left: (innerSize - 2) / 2,
-                  top: innerSize * 0.1
-                }}
+                style={{ width: 2, height: knobSize * 0.3, top: knobSize * 0.1 }}
               />
             )}
         </div>

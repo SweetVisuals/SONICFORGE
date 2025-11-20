@@ -149,6 +149,31 @@ export const createDefaultLayout = (type: PluginType, defaultColor: string, nest
     
     const isHybrid = type === PluginType.HYBRID_EQ_DYN;
 
+    // 1. Add Branding Header
+    layout.push({
+        id: Math.random().toString(36).substring(2, 9),
+        type: 'BRANDING',
+        label: type,
+        color: defaultColor,
+        colSpan: 4,
+        alignment: 'left',
+        fontSize: 18,
+        height: 40
+    });
+
+    // 2. Add Visualizer for supported types
+    if (type === PluginType.VISUAL_EQ || type === PluginType.HYBRID_EQ_DYN || type === PluginType.SHINE) {
+        layout.push({
+            id: Math.random().toString(36).substring(2, 9),
+            type: 'VISUALIZER',
+            label: 'Spectrum',
+            colSpan: 4,
+            height: 288
+        });
+    }
+
+    const knobComponents: UIComponent[] = [];
+
     params.forEach(p => {
         if (p.hidden) return;
         
@@ -173,7 +198,7 @@ export const createDefaultLayout = (type: PluginType, defaultColor: string, nest
              }
         }
 
-        layout.push({
+        knobComponents.push({
             id: Math.random().toString(36).substring(2, 9),
             type: 'KNOB',
             label: p.name,
@@ -183,6 +208,17 @@ export const createDefaultLayout = (type: PluginType, defaultColor: string, nest
             style: 'classic',
             visibleOnLayer
         });
+    });
+
+    // 3. Wrap Knobs in a Section
+    layout.push({
+        id: Math.random().toString(36).substring(2, 9),
+        type: 'SECTION',
+        label: 'Controls',
+        children: knobComponents,
+        colSpan: 4,
+        sectionVariant: 'card', // Default to card
+        color: '#ffffff'
     });
 
     return layout;

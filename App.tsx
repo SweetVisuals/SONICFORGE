@@ -1,8 +1,12 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { PluginType, PluginModuleState, GemimiCodeResponse, PluginLayer, VisualizerMode, AudioParamConfig, SaturationMode, ShineMode, UIComponent } from './types';
+import { PluginType, PluginModuleState, GemimiCodeResponse, PluginLayer, VisualizerMode, AudioParamConfig, SaturationMode, ShineMode, UIComponent, UIComponentType, RackVariant, SectionVariant } from './types';
 import { PLUGIN_DEFINITIONS, LAYER_TO_PLUGIN_TYPE, createDefaultLayout } from './constants';
 import { Knob } from './components/Knob';
+import { Slider } from './components/Slider';
+import { Switch } from './components/Switch';
+import { Screw } from './components/Screw';
+import { Rack } from './components/Rack';
 import { Visualizer } from './components/Visualizer';
 import { VisualEQ } from './components/VisualEQ';
 import { Transport } from './components/Transport';
@@ -12,12 +16,169 @@ import {
   Zap, Download, Code, Loader2, 
   X, GripVertical, Activity, PlayCircle, Check, Merge, 
   Cpu, Layers, PenTool, ChevronRight, Box, Terminal, GitMerge,
-  Waves, Grid, Sparkles, Tag, Plus, Trash2, LayoutTemplate, ChevronLeft, List, Move
+  Waves, Grid, Sparkles, Tag, Plus, Trash2, LayoutTemplate, ChevronLeft, List, Move,
+  Maximize, Columns, Image as ImageIcon, Type, AlignLeft, AlignCenter, AlignRight, MousePointer2,
+  CornerDownRight, FolderOpen, ToggleLeft, Sliders, Nut, Circle, Server, AlignJustify, ArrowLeftRight, ArrowUpDown
 } from 'lucide-react';
 
 const generateId = () => Math.random().toString(36).substring(2, 9);
 
 type AppMode = 'ARCHITECT' | 'DESIGNER' | 'ENGINEER';
+
+type DragPosition = 'left' | 'right' | 'top' | 'bottom' | 'inside';
+
+// Helper component for styled color input
+const ColorPicker = ({ value, onChange, label }: { value: string, onChange: (val: string) => void, label?: string }) => (
+  <div className="w-full">
+    {label && <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">{label}</label>}
+    <div className="relative h-8 w-full rounded-sm border border-white/10 overflow-hidden group cursor-pointer">
+      <div 
+        className="absolute inset-0 transition-colors" 
+        style={{ backgroundColor: value }}
+      ></div>
+      <div className="absolute inset-0 flex items-center justify-between px-2 bg-black/10 group-hover:bg-transparent transition-colors">
+         <span className="text-[10px] font-mono font-bold text-white drop-shadow-md uppercase">{value}</span>
+      </div>
+      <input 
+        type="color" 
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+      />
+    </div>
+  </div>
+);
+
+// Recursive helpers for tree manipulation
+const findComponent = (layout: UIComponent[], id: string): UIComponent | null => {
+    for (const c of layout) {
+        if (c.id === id) return c;
+        if (c.children) {
+            const found = findComponent(c.children, id);
+            if (found) return found;
+        }
+    }
+    return null;
+};
+
+const findParent = (layout: UIComponent[], id: string): UIComponent | null => {
+    for (const c of layout) {
+        if (c.children) {
+             if (c.children.some(child => child.id === id)) return c;
+             const found = findParent(c.children, id);
+             if (found) return found;
+        }
+    }
+    return null;
+};
+
+const removeNode = (nodes: UIComponent[], id: string): { node: UIComponent | null, newNodes: UIComponent[] } => {
+    const index = nodes.findIndex(n => n.id === id);
+    if (index !== -1) {
+        const node = nodes[index];
+        const newNodes = [...nodes];
+        newNodes.splice(index, 1);
+        return { node, newNodes };
+    }
+    
+    const newNodes = [];
+    let foundNode = null;
+
+    for (const n of nodes) {
+        if (n.children) {
+            const result = removeNode(n.children, id);
+            if (result.node) {
+                foundNode = result.node;
+                newNodes.push({ ...n, children: result.newNodes });
+            } else {
+                newNodes.push(n);
+            }
+        } else {
+            newNodes.push(n);
+        }
+    }
+    return { node: foundNode, newNodes };
+};
+
+const insertNode = (nodes: UIComponent[], targetId: string, nodeToInsert: UIComponent, position: 'before'|'after'|'inside'|'at_index', index?: number): UIComponent[] => {
+    if (position === 'inside' || position === 'at_index') {
+        const parentIdx = nodes.findIndex(n => n.id === targetId);
+        if (parentIdx !== -1) {
+            const parent = nodes[parentIdx];
+            let newChildren = parent.children ? [...parent.children] : [];
+            
+            if (position === 'at_index' && typeof index === 'number') {
+                // Fill with spacers if needed
+                if (index > newChildren.length) {
+                    const spacersNeeded = index - newChildren.length;
+                    for(let i=0; i<spacersNeeded; i++) {
+                        newChildren.push({
+                            id: generateId(),
+                            type: 'SPACER',
+                            label: 'Spacer',
+                            colSpan: 1
+                        });
+                    }
+                }
+                newChildren.splice(index, 0, nodeToInsert);
+            } else {
+                newChildren.push(nodeToInsert);
+            }
+            
+            const newNodes = [...nodes];
+            newNodes[parentIdx] = { ...parent, children: newChildren };
+            return newNodes;
+        }
+    }
+
+    const parentIdx = nodes.findIndex(n => n.id === targetId);
+    if (parentIdx !== -1 && (position === 'before' || position === 'after')) {
+        const newNodes = [...nodes];
+        if (position === 'before') newNodes.splice(parentIdx, 0, nodeToInsert);
+        else newNodes.splice(parentIdx + 1, 0, nodeToInsert);
+        return newNodes;
+    }
+
+    return nodes.map(n => {
+        if (n.children) {
+            return { ...n, children: insertNode(n.children, targetId, nodeToInsert, position, index) };
+        }
+        return n;
+    });
+};
+
+const updateNode = (nodes: UIComponent[], id: string, updates: Partial<UIComponent>): UIComponent[] => {
+    return nodes.map(n => {
+        if (n.id === id) return { ...n, ...updates };
+        if (n.children) return { ...n, children: updateNode(n.children, id, updates) };
+        return n;
+    });
+};
+
+// Visual Drop Zone Component
+const DropZone = ({ position }: { position: DragPosition }) => {
+    const isVertical = position === 'left' || position === 'right';
+    const isHorizontal = position === 'top' || position === 'bottom';
+    
+    return (
+        <div 
+            className={`
+                absolute z-50 bg-cyan-500/60 border-2 border-cyan-400 rounded-sm animate-in fade-in zoom-in-95 pointer-events-none shadow-[0_0_15px_rgba(34,211,238,0.5)]
+                ${position === 'top' ? 'top-0 left-0 right-0 h-1.5' : ''}
+                ${position === 'bottom' ? 'bottom-0 left-0 right-0 h-1.5' : ''}
+                ${position === 'left' ? 'left-0 top-0 bottom-0 w-1.5' : ''}
+                ${position === 'right' ? 'right-0 top-0 bottom-0 w-1.5' : ''}
+                ${position === 'inside' ? 'inset-0 bg-cyan-500/20 border-dashed border-4' : ''}
+            `}
+        >
+            {position === 'inside' && (
+                <div className="absolute inset-0 flex items-center justify-center">
+                     <CornerDownRight size={24} className="text-cyan-400 drop-shadow-lg" />
+                </div>
+            )}
+        </div>
+    );
+};
 
 export default function App() {
   // State
@@ -27,9 +188,16 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [audioFile, setAudioFile] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
-  const [draggedItemIndex, setDraggedItemIndex] = useState<number | null>(null);
-  const [draggedComponentId, setDraggedComponentId] = useState<string | null>(null);
   
+  // Drag & Drop State
+  const [draggedComponentId, setDraggedComponentId] = useState<string | null>(null);
+  const [dragOverInfo, setDragOverInfo] = useState<{ id: string, position: DragPosition } | null>(null);
+  
+  // Resizing
+  const [resizingRackId, setResizingRackId] = useState<string | null>(null);
+  const resizingStartY = useRef<number>(0);
+  const resizingStartHeight = useRef<number>(0);
+
   // Playback State
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -55,8 +223,6 @@ export default function App() {
   const addModule = (type: PluginType) => {
     handleInitAudio();
     const def = PLUGIN_DEFINITIONS[type];
-    
-    // Pre-calculate nested modules for hybrid to generate correct layout
     const nestedModules = type === PluginType.HYBRID_EQ_DYN ? [PluginType.VISUAL_EQ, PluginType.COMPRESSOR] : undefined;
     
     const newModule: PluginModuleState = {
@@ -71,7 +237,7 @@ export default function App() {
       activeLayer: PluginLayer.EQ,
       saturationMode: 'TUBE',
       shineMode: 'AIR',
-      title: type, // Default Title
+      title: type, 
       layout: createDefaultLayout(type, def.defaultColor, nestedModules)
     };
 
@@ -86,35 +252,6 @@ export default function App() {
       if (selectedModuleId === id) setSelectedModuleId(null);
   };
   
-  const unmergeModule = (moduleId: string, typeToRemove: PluginType) => {
-      setModules(prev => prev.map(m => {
-          if (m.id !== moduleId) return m;
-          
-          // Filter out the removed type
-          const newNested = m.nestedModules?.filter(t => t !== typeToRemove) || [];
-          
-          const basicEqOnly = newNested.length === 0 || (newNested.length === 1 && newNested[0] === PluginType.VISUAL_EQ);
-          
-          if (basicEqOnly) {
-             return {
-                 ...m,
-                 type: PluginType.VISUAL_EQ,
-                 nestedModules: undefined,
-                 color: PLUGIN_DEFINITIONS[PluginType.VISUAL_EQ].defaultColor,
-                 title: PluginType.VISUAL_EQ,
-                 layout: createDefaultLayout(PluginType.VISUAL_EQ, PLUGIN_DEFINITIONS[PluginType.VISUAL_EQ].defaultColor)
-             };
-          }
-          
-          return {
-              ...m,
-              nestedModules: newNested,
-              // Regenerate layout to remove controls for removed module
-              layout: createDefaultLayout(PluginType.HYBRID_EQ_DYN, m.color, newNested)
-          };
-      }));
-  };
-  
   const toggleBypass = (id: string) => {
       setModules(prev => prev.map(m => m.id === id ? { ...m, enabled: !m.enabled } : m));
   };
@@ -122,6 +259,10 @@ export default function App() {
   const toggleSelection = (id: string) => {
       setModules(prev => prev.map(m => m.id === id ? { ...m, selected: !m.selected } : m));
   };
+
+  const clearSelection = () => {
+      setModules(prev => prev.map(m => ({ ...m, selected: false })));
+  }
 
   const selectForSidebar = (moduleId: string, componentId?: string) => {
       setSelectedModuleId(moduleId);
@@ -147,7 +288,7 @@ export default function App() {
       setModules(prev => {
           const next = prev.map(m => m.id === moduleId ? { ...m, ...updates } : m);
           const updatedModule = next.find(m => m.id === moduleId);
-          if (updatedModule) audioEngine.updateParams(updatedModule); // Ensure mode changes apply
+          if (updatedModule) audioEngine.updateParams(updatedModule);
           return next;
       });
   };
@@ -163,18 +304,16 @@ export default function App() {
 
   const updateComponent = (moduleId: string, componentId: string, updates: Partial<UIComponent>) => {
       setModules(prev => prev.map(m => {
-          if (m.id !== moduleId) return m;
-          return { 
-              ...m, 
-              layout: m.layout?.map(c => c.id === componentId ? { ...c, ...updates } : c) 
-          };
+          if (m.id !== moduleId || !m.layout) return m;
+          return { ...m, layout: updateNode(m.layout, componentId, updates) };
       }));
   };
 
   const removeComponent = (moduleId: string, componentId: string) => {
       setModules(prev => prev.map(m => {
-          if (m.id !== moduleId) return m;
-          return { ...m, layout: m.layout?.filter(c => c.id !== componentId) };
+          if (m.id !== moduleId || !m.layout) return m;
+          const { newNodes } = removeNode(m.layout, componentId);
+          return { ...m, layout: newNodes };
       }));
       if (selectedComponentId === componentId) {
           setSelectedComponentId(null);
@@ -183,33 +322,108 @@ export default function App() {
 
   const handleComponentDragStart = (e: React.DragEvent, id: string) => {
       e.stopPropagation();
-      setDraggedComponentId(id);
+      // Required for Firefox and some other browsers to initiate drag
+      e.dataTransfer.setData('text/plain', id);
+      e.dataTransfer.effectAllowed = 'move';
+      
+      // Use setTimeout to prevent browser from cancelling drag if DOM updates too fast
+      setTimeout(() => {
+          setDraggedComponentId(id);
+      }, 0);
   };
 
-  const handleComponentDragOver = (e: React.DragEvent, targetId: string, moduleId: string) => {
+  const handleComponentDrop = (e: React.DragEvent, targetId: string, moduleId: string, position: DragPosition | 'at_index', index?: number) => {
       e.preventDefault();
       e.stopPropagation();
-      if (!draggedComponentId || draggedComponentId === targetId) return;
+      setDragOverInfo(null);
+      
+      if (!draggedComponentId || draggedComponentId === targetId) {
+          setDraggedComponentId(null);
+          return;
+      }
 
       setModules(prev => prev.map(m => {
           if (m.id !== moduleId || !m.layout) return m;
-          
-          const layout = [...m.layout];
-          const dragIndex = layout.findIndex(c => c.id === draggedComponentId);
-          const targetIndex = layout.findIndex(c => c.id === targetId);
-          
-          if (dragIndex === -1 || targetIndex === -1) return m;
-          
-          const [removed] = layout.splice(dragIndex, 1);
-          layout.splice(targetIndex, 0, removed);
-          
-          return { ...m, layout };
-      }));
-  };
 
-  const handleComponentDragEnd = () => {
+          const parent = findParent(m.layout, targetId);
+          const parentIsRack = parent?.type === 'RACK';
+          
+          const { node, newNodes } = removeNode(m.layout, draggedComponentId);
+          if (!node) return m;
+
+          // Auto-Grouping Logic for Racks (Side-by-side)
+          if (parentIsRack && (position === 'left' || position === 'right')) {
+               const swapNodes = (list: UIComponent[]): UIComponent[] => {
+                   return list.map(n => {
+                       if (n.id === targetId) {
+                           // If target is already a row-group, insert into it
+                           if (n.type === 'SECTION' && n.layoutDirection === 'row') {
+                               return { 
+                                   ...n, 
+                                   children: position === 'left' 
+                                       ? [node, ...(n.children || [])]
+                                       : [...(n.children || []), node]
+                               };
+                           }
+                           // Otherwise, wrap target and node in a new row-group
+                           return {
+                               id: generateId(),
+                               type: 'SECTION',
+                               label: 'Group',
+                               colSpan: 1,
+                               layoutDirection: 'row',
+                               sectionVariant: 'minimal',
+                               children: position === 'left' ? [node, n] : [n, node]
+                           };
+                       }
+                       if (n.children) return { ...n, children: swapNodes(n.children) };
+                       return n;
+                   });
+               }
+               return { ...m, layout: swapNodes(newNodes) };
+          }
+
+          // Map DragPosition to insertNode position
+          let insertPos: 'before' | 'after' | 'inside' | 'at_index' = 'inside';
+          if (position === 'at_index') insertPos = 'at_index';
+          else if (position === 'left' || position === 'top') insertPos = 'before';
+          else if (position === 'right' || position === 'bottom') insertPos = 'after';
+          else insertPos = 'inside'; // fallback
+
+          const finalNodes = insertNode(newNodes, targetId, node, insertPos, index);
+          return { ...m, layout: finalNodes };
+      }));
+      
       setDraggedComponentId(null);
   };
+
+  // Handle Rack Resizing
+  useEffect(() => {
+      const handleMouseMove = (e: MouseEvent) => {
+          if (resizingRackId && selectedModuleId) {
+               const deltaY = e.clientY - resizingStartY.current;
+               const newHeight = Math.max(100, resizingStartHeight.current + deltaY);
+               updateComponent(selectedModuleId, resizingRackId, { height: newHeight });
+          }
+      };
+      const handleMouseUp = () => {
+          if (resizingRackId) {
+              setResizingRackId(null);
+              document.body.style.cursor = 'default';
+          }
+      };
+      
+      if (resizingRackId) {
+          window.addEventListener('mousemove', handleMouseMove);
+          window.addEventListener('mouseup', handleMouseUp);
+          document.body.style.cursor = 'ns-resize';
+      }
+      return () => {
+          window.removeEventListener('mousemove', handleMouseMove);
+          window.removeEventListener('mouseup', handleMouseUp);
+      };
+  }, [resizingRackId, selectedModuleId]);
+
 
   // Combine Logic
   const selectedModules = modules.filter(m => m.selected);
@@ -243,8 +457,6 @@ export default function App() {
       });
       
       hybrid.nestedModules = [...new Set(hybrid.nestedModules)];
-      
-      // Generate a fresh layout for the combined module
       hybrid.layout = createDefaultLayout(PluginType.HYBRID_EQ_DYN, def.defaultColor, hybrid.nestedModules);
 
       setModules(prev => {
@@ -252,32 +464,12 @@ export default function App() {
           return [...remaining, hybrid];
       });
       setSelectedModuleId(hybrid.id);
+      clearSelection();
   };
 
-  // Audio Chain Updates
   useEffect(() => {
     audioEngine.updatePluginChain(modules);
   }, [modules.length, modules.map(m => m.id).join(','), modules.map(m => m.enabled).join(','), modules.map(m => m.saturationMode).join(','), modules.map(m => m.shineMode).join(',')]);
-
-  // Drag and Drop
-  const handleDragStart = (index: number) => {
-      setDraggedItemIndex(index);
-  };
-
-  const handleDragOver = (e: React.DragEvent, index: number) => {
-      e.preventDefault();
-      if (draggedItemIndex === null || draggedItemIndex === index) return;
-      const newModules = [...modules];
-      const draggedItem = newModules[draggedItemIndex];
-      newModules.splice(draggedItemIndex, 1);
-      newModules.splice(index, 0, draggedItem);
-      setModules(newModules);
-      setDraggedItemIndex(index);
-  };
-
-  const handleDragEnd = () => {
-      setDraggedItemIndex(null);
-  };
 
   // Code Generation
   const handleGenerateCode = async () => {
@@ -296,69 +488,356 @@ export default function App() {
       handleInitAudio();
     }
   };
-  
-  const handleDownloadVst = () => {
-      if (!generatedCode) return;
-      const element = document.createElement("a");
-      const file = new Blob([generatedCode.cppCode], {type: 'text/plain'});
-      element.href = URL.createObjectURL(file);
-      element.download = "PluginProcessor.cpp";
-      document.body.appendChild(element);
-      element.click();
-  };
-  
-  // Transport Logic
-  const togglePlay = () => {
-      if (!audioRef.current) return;
-      if (isPlaying) {
-          audioRef.current.pause();
-      } else {
-          audioRef.current.play();
-      }
-  };
-  
-  const handleSeek = (time: number) => {
-      if (audioRef.current) {
-          audioRef.current.currentTime = time;
-      }
-  };
-  
-  const handleRestart = () => {
-      if(audioRef.current) {
-          audioRef.current.currentTime = 0;
-          if (!isPlaying) audioRef.current.play();
-      }
-  };
-
-  const handleTimeUpdate = () => {
-      if (audioRef.current) setCurrentTime(audioRef.current.currentTime);
-  };
-
-  const handleLoadedMetadata = () => {
-      if (audioRef.current) {
-          setDuration(audioRef.current.duration);
-          audioEngine.loadSource(audioRef.current); 
-      }
-  };
-
-  const handleAudioEnded = () => {
-      setIsPlaying(false);
-  };
 
   const activeModule = modules.find(m => m.id === selectedModuleId);
-  const activeComponent = activeModule?.layout?.find(c => c.id === selectedComponentId);
+  const activeComponent = activeModule?.layout ? findComponent(activeModule.layout, selectedComponentId || '') : null;
   
-  // Enum Lists
-  const SAT_MODES: SaturationMode[] = ['TUBE', 'TAPE', 'DIGITAL', 'FUZZ', 'RECTIFY'];
-  const SHINE_MODES: ShineMode[] = ['AIR', 'CRYSTAL', 'SHIMMER', 'GLOSS', 'ANGELIC'];
+  const RenderSidebarTree = ({ components, depth = 0 }: { components: UIComponent[], depth?: number }) => {
+      return (
+          <div className="space-y-1">
+              {components.map(comp => (
+                  <div key={comp.id}>
+                      <div 
+                          onClick={() => selectForSidebar(activeModule!.id, comp.id)}
+                          className={`flex items-center justify-between px-2 py-1.5 rounded cursor-pointer group transition-colors
+                              ${selectedComponentId === comp.id ? 'bg-white/10 text-white' : 'text-neutral-500 hover:bg-white/5 hover:text-neutral-300'}
+                          `}
+                          style={{ paddingLeft: `${depth * 12 + 8}px` }}
+                      >
+                          <div className="flex items-center space-x-2 overflow-hidden">
+                                {comp.type === 'SECTION' ? <Columns size={10} /> : 
+                                 comp.type === 'RACK' ? <Server size={10} /> :
+                                 comp.type === 'KNOB' ? <Activity size={10} /> :
+                                 comp.type === 'SLIDER' ? <Sliders size={10} /> :
+                                 comp.type === 'SWITCH' ? <ToggleLeft size={10} /> :
+                                 comp.type === 'BRANDING' ? <Tag size={10} /> :
+                                 comp.type === 'VISUALIZER' ? <Waves size={10} /> :
+                                 <Box size={10} />}
+                                <span className="text-[10px] font-medium truncate">{comp.label || comp.type}</span>
+                          </div>
+                          <button 
+                              onClick={(e) => { e.stopPropagation(); removeComponent(activeModule!.id, comp.id); }}
+                              className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-500 transition-opacity"
+                          >
+                              <X size={10} />
+                          </button>
+                      </div>
+                      {comp.children && comp.children.length > 0 && (
+                          <RenderSidebarTree components={comp.children} depth={depth + 1} />
+                      )}
+                  </div>
+              ))}
+          </div>
+      );
+  };
+
+  const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleState, index: number, parentLayout?: 'grid'|'flex' }> = ({ component, module, index, parentLayout }) => {
+      if (component.visibleOnLayer && component.visibleOnLayer !== module.activeLayer) return null;
+      
+      const isSelected = appMode === 'DESIGNER' && selectedComponentId === component.id;
+      const isDragging = draggedComponentId === component.id;
+      
+      const span = component.colSpan || 1;
+      let colClass = '';
+      if (parentLayout !== 'flex') {
+          colClass = `col-span-${Math.min(4, Math.max(1, span))}`;
+          if (['KNOB', 'SWITCH', 'SCREW', 'SLIDER'].includes(component.type) && !component.colSpan) colClass = 'col-span-1';
+      }
+      
+      const alignClass = component.align === 'start' ? 'items-start' : component.align === 'end' ? 'items-end' : component.align === 'stretch' ? 'items-stretch' : 'items-center';
+      const justifyClass = component.justify === 'start' ? 'justify-start' : component.justify === 'end' ? 'justify-end' : component.justify === 'between' ? 'justify-between' : 'justify-center';
+
+      return (
+          <div 
+              key={component.id}
+              onClick={(e) => {
+                  if (appMode === 'DESIGNER') {
+                      e.stopPropagation();
+                      selectForSidebar(module.id, component.id);
+                  }
+              }}
+              draggable={appMode === 'DESIGNER'}
+              onDragStart={(e) => {
+                   if (appMode === 'DESIGNER') handleComponentDragStart(e, component.id);
+              }}
+              onDragEnd={() => {
+                  setDraggedComponentId(null);
+                  setDragOverInfo(null);
+              }}
+              onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (draggedComponentId === component.id) return;
+                  
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const x = e.clientX - rect.left;
+                  const y = e.clientY - rect.top;
+                  const w = rect.width;
+                  const h = rect.height;
+
+                  // Define regions with larger drop zones for easier targeting
+                  const edge = Math.min(40, Math.min(w, h) * 0.25); // Increased max edge to 40px
+                  const isContainer = component.type === 'SECTION' || component.type === 'RACK';
+                  
+                  let pos: DragPosition = 'inside';
+
+                  // Priority Logic
+                  // Improved edge detection for containers
+                  if (y < edge) pos = 'top';
+                  else if (y > h - edge) pos = 'bottom';
+                  else if (x < edge) pos = 'left';
+                  else if (x > w - edge) pos = 'right';
+                  else pos = 'inside';
+
+                  if (dragOverInfo?.id !== component.id || dragOverInfo?.position !== pos) {
+                      setDragOverInfo({ id: component.id, position: pos });
+                  }
+              }}
+              onDrop={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (appMode === 'DESIGNER' && draggedComponentId && draggedComponentId !== component.id) {
+                       if (component.type === 'RACK' && dragOverInfo?.position === 'inside') {
+                            // Dragging INTO a rack (on the container itself), default to appending or last slot
+                            handleComponentDrop(e, component.id, module.id, 'inside');
+                       } else {
+                           const pos = dragOverInfo?.id === component.id && dragOverInfo?.position ? dragOverInfo.position : 'inside';
+                           handleComponentDrop(e, component.id, module.id, pos);
+                       }
+                  }
+                  setDragOverInfo(null);
+              }}
+              className={`relative transition-all duration-200 flex flex-col ${alignClass} ${justifyClass}
+                  ${isSelected ? 'ring-1 ring-cyan-500/50 bg-cyan-500/5 rounded-sm' : ''} 
+                  ${appMode === 'DESIGNER' ? 'cursor-grab active:cursor-grabbing hover:bg-white/5 rounded-sm' : ''}
+                  ${isDragging ? 'opacity-40 scale-95' : ''}
+                  ${colClass}
+                  ${parentLayout === 'flex' ? 'flex-1 min-w-0' : ''}
+              `}
+              style={{ 
+                  height: component.type === 'VISUALIZER' ? (component.height || 280) : (component.type === 'SPACER' || component.type === 'BRANDING' ? (component.height || 24) : (component.type === 'RACK' ? 'auto' : 'auto')),
+              }}
+          >
+              {/* Overlay DropZone */}
+              {dragOverInfo?.id === component.id && (
+                  <DropZone position={dragOverInfo.position} />
+              )}
+
+              {/* --- RENDER TYPES --- */}
+              
+              {component.type === 'KNOB' && component.paramId && (
+                  <div className="p-1 pointer-events-none">
+                    <Knob
+                        label={component.label}
+                        value={module.params[component.paramId] !== undefined ? module.params[component.paramId] : 0}
+                        min={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.min || 0}
+                        max={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.max || 100}
+                        unit={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.unit}
+                        color={component.color}
+                        size={component.size || 56}
+                        variant={component.style || 'classic'}
+                        onChange={(val) => component.paramId && updateParam(module.id, component.paramId, val)}
+                    />
+                  </div>
+              )}
+
+              {component.type === 'SLIDER' && component.paramId && (
+                  <div className="p-2 h-full flex items-center justify-center w-full pointer-events-none">
+                    <Slider
+                        label={component.label}
+                        value={module.params[component.paramId] !== undefined ? module.params[component.paramId] : 0}
+                        min={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.min || 0}
+                        max={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.max || 100}
+                        unit={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.unit}
+                        color={component.color}
+                        orientation={component.orientation || 'vertical'}
+                        style={component.style || 'classic'}
+                        onChange={(val) => component.paramId && updateParam(module.id, component.paramId, val)}
+                    />
+                  </div>
+              )}
+
+              {component.type === 'SWITCH' && component.paramId && (
+                  <div className="p-1 w-full h-full flex items-center justify-center pointer-events-none">
+                    <Switch
+                        label={component.label}
+                        value={module.params[component.paramId] !== undefined ? module.params[component.paramId] : 0}
+                        color={component.color}
+                        style={component.style || 'classic'}
+                        onChange={(val) => component.paramId && updateParam(module.id, component.paramId, val)}
+                    />
+                  </div>
+              )}
+              
+              {component.type === 'SCREW' && (
+                  <div className="p-1 pointer-events-none">
+                      <Screw size={component.size || 14} />
+                  </div>
+              )}
+
+              {component.type === 'BRANDING' && (
+                  <div 
+                      className={`w-full h-full flex items-center p-2 overflow-hidden rounded-sm border border-transparent
+                          ${component.alignment === 'center' ? 'justify-center text-center' : component.alignment === 'right' ? 'justify-end text-right' : 'justify-start text-left'}
+                      `}
+                      style={{ 
+                          backgroundColor: component.imageUrl ? 'transparent' : (component.color ? `${component.color}10` : 'transparent')
+                      }}
+                  >
+                      {component.imageUrl && (
+                          <img src={component.imageUrl} className="absolute inset-0 w-full h-full object-cover opacity-50 pointer-events-none" alt="" />
+                      )}
+                      <div className="relative z-10 pointer-events-none" style={{ color: component.color || '#fff' }}>
+                          <h3 className="font-black uppercase tracking-tighter leading-none" style={{ fontSize: component.fontSize || 18 }}>
+                              {component.label}
+                          </h3>
+                      </div>
+                  </div>
+              )}
+
+              {component.type === 'VISUALIZER' && (
+                  <div className="w-full h-full pointer-events-auto">
+                      <VisualEQ 
+                          module={module} 
+                          onChangeParam={(p, v) => updateParam(module.id, p, v)} 
+                          onLayerChange={(layer) => updateModuleState(module.id, { activeLayer: layer })} 
+                      />
+                  </div>
+              )}
+
+              {component.type === 'RACK' && (
+                  <div className="w-full flex flex-col items-center relative">
+                      <Rack 
+                        splits={component.rackSplits || 4} 
+                        label={component.label}
+                        variant={component.rackVariant}
+                        editMode={appMode === 'DESIGNER'}
+                        itemsCount={component.children ? component.children.length : 0}
+                        height={component.height || 400}
+                      >
+                          {Array.from({ length: component.rackSplits || 4 }).map((_, slotIdx) => {
+                              const child = component.children ? component.children[slotIdx] : undefined;
+                              
+                              return (
+                                  <div 
+                                    key={slotIdx} 
+                                    className="relative w-full h-full flex flex-col"
+                                    onDragOver={(e) => {
+                                        // Allow dragging into empty slot
+                                        if (!child) {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            setDragOverInfo({ id: `${component.id}-slot-${slotIdx}`, position: 'inside' });
+                                        }
+                                    }}
+                                    onDrop={(e) => {
+                                        if (appMode === 'DESIGNER' && !child) {
+                                            handleComponentDrop(e, component.id, module.id, 'at_index', slotIdx);
+                                        }
+                                    }}
+                                  >
+                                      {dragOverInfo?.id === `${component.id}-slot-${slotIdx}` && (
+                                          <div className="absolute inset-0 bg-cyan-500/20 z-20 flex items-center justify-center border-2 border-cyan-500/50 animate-pulse">
+                                              <Plus size={24} className="text-cyan-400" />
+                                          </div>
+                                      )}
+
+                                      {child ? (
+                                          <div className="w-full h-full relative">
+                                            <RenderComponent component={child} module={module} index={slotIdx} />
+                                          </div>
+                                      ) : (
+                                          appMode === 'DESIGNER' && (
+                                              <div className="w-full h-full flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity group/slot">
+                                                  <div className="w-4 h-4 border border-dashed border-white/20 rounded-full group-hover/slot:scale-125 transition-transform"></div>
+                                              </div>
+                                          )
+                                      )}
+                                  </div>
+                              )
+                          })}
+                      </Rack>
+                      {/* Resizer Handle */}
+                      {appMode === 'DESIGNER' && (
+                          <div 
+                              className="w-full h-3 bg-neutral-800/50 hover:bg-cyan-500/50 cursor-ns-resize flex items-center justify-center border-t border-white/5 mt-0.5 rounded-b"
+                              onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setResizingRackId(component.id);
+                                  resizingStartY.current = e.clientY;
+                                  resizingStartHeight.current = component.height || 400;
+                              }}
+                          >
+                              <GripVertical size={10} className="rotate-90 text-white/50" />
+                          </div>
+                      )}
+                  </div>
+              )}
+
+              {component.type === 'SECTION' && (
+                  <div className={`w-full relative h-full flex flex-col pointer-events-none
+                      ${component.sectionVariant === 'card' ? 'bg-[#121212] border border-white/10 rounded p-3 shadow-lg' : ''}
+                      ${component.sectionVariant === 'solid' ? 'bg-[#0a0a0a] rounded-sm' : ''}
+                      ${component.sectionVariant === 'glass_row' ? 'bg-white/[0.03] border border-white/5 rounded-full px-2' : ''}
+                  `}>
+                      {/* Section Header */}
+                      {component.sectionVariant !== 'glass_row' && component.sectionVariant !== 'minimal' && (
+                          <div 
+                            className={`flex items-center mb-2 pointer-events-none shrink-0
+                            ${component.sectionVariant === 'solid' ? 'p-2 bg-white/5 text-center justify-center' : ''} 
+                            `}
+                          >
+                            {component.sectionVariant !== 'solid' && component.sectionVariant !== 'card' && (
+                                <div className="h-1 w-1 bg-current rounded-full mr-2" style={{ color: component.color }}></div>
+                            )}
+                            <h3 
+                                className="text-[9px] font-bold uppercase tracking-widest opacity-80"
+                                style={{ color: component.color }}
+                            >
+                                {component.label}
+                            </h3>
+                          </div>
+                      )}
+
+                      {/* Nested Layout Container */}
+                      <div 
+                          className={`relative flex-1 pointer-events-auto
+                              ${component.layoutDirection === 'row' ? 'flex flex-row items-center space-x-2' : 'grid gap-2'}
+                          `}
+                          style={component.layoutDirection !== 'row' ? {
+                              gridTemplateColumns: `repeat(${component.gridCols || 4}, minmax(0, 1fr))`
+                          } : {}}
+                      >
+                          {component.children && component.children.map((child, i) => (
+                              <RenderComponent key={child.id} component={child} module={module} index={i} parentLayout={component.layoutDirection === 'row' ? 'flex' : 'grid'} />
+                          ))}
+                          
+                          {/* Empty State for Section */}
+                          {appMode === 'DESIGNER' && (!component.children || component.children.length === 0) && (
+                              <div className="col-span-full w-full h-full min-h-[32px] border border-dashed border-white/10 rounded flex items-center justify-center text-neutral-700 pointer-events-none">
+                                  <span className="text-[8px]">Container</span>
+                              </div>
+                          )}
+                      </div>
+                  </div>
+              )}
+
+              {component.type === 'SPACER' && (
+                  <div className={`w-full h-full flex items-center justify-center overflow-hidden min-h-[10px]
+                     ${appMode === 'DESIGNER' ? 'border border-dashed border-white/5 bg-white/[0.02]' : ''}
+                  `}>
+                  </div>
+              )}
+          </div>
+      );
+  };
 
   return (
-    <div className="flex h-screen w-full bg-[#020202] text-gray-100 font-sans overflow-hidden selection:bg-cyan-500/30">
+    <div className="flex h-screen w-full bg-[#020202] text-gray-100 font-sans overflow-hidden selection:bg-cyan-500/30" onDragOver={(e) => e.preventDefault()} onDrop={() => { setDraggedComponentId(null); setDragOverInfo(null); }}>
       
-      {/* --- LEFT SIDEBAR (Configuration) --- */}
+      {/* --- LEFT SIDEBAR --- */}
       <div className="w-[480px] bg-[#050505] border-r border-white/5 flex flex-col z-30 shadow-2xl flex-shrink-0">
-          
-          {/* Header */}
           <div className="h-16 flex items-center px-6 border-b border-white/5">
             <div className="w-6 h-6 bg-cyan-500 rounded-sm flex items-center justify-center mr-3 shadow-[0_0_10px_rgba(34,211,238,0.4)]">
                 <Zap size={14} className="text-black fill-current" />
@@ -369,69 +848,47 @@ export default function App() {
             </div>
           </div>
 
-          {/* Config Content */}
           <div className="flex-1 overflow-y-auto p-6 custom-scrollbar space-y-8">
-            
-            {/* --- ARCHITECT MODE CONTENT --- */}
             {appMode === 'ARCHITECT' && (
                 <>
-                    {/* Module Composition (Nested Plugins) */}
-                    {activeModule && activeModule.nestedModules && activeModule.nestedModules.length > 0 && (
-                        <div className="space-y-3 animate-in fade-in slide-in-from-left-4">
-                            <label className="text-[10px] font-bold text-cyan-500 uppercase tracking-widest flex items-center">
-                                <GitMerge size={12} className="mr-2"/> Active Composition
-                            </label>
-                            <div className="bg-[#0a0a0a] border border-cyan-900/30 rounded-sm p-4 relative overflow-hidden">
-                                <div className="absolute top-0 left-0 w-0.5 h-full bg-cyan-500"></div>
-                                <div className="space-y-2">
-                                    {activeModule.nestedModules.map((type, i) => (
-                                        <div key={i} className="flex items-center justify-between text-xs text-neutral-300 bg-black/20 p-2 rounded border border-transparent hover:border-white/5 group transition-all">
-                                            <div className="flex items-center">
-                                                <div className="w-1.5 h-1.5 rounded-full bg-cyan-500/50 mr-2"></div>
-                                                {type}
-                                            </div>
-                                            {type !== PluginType.VISUAL_EQ && (
-                                                <button 
-                                                    onClick={() => unmergeModule(activeModule.id, type)}
-                                                    className="text-neutral-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
-                                                >
-                                                    <X size={12} />
-                                                </button>
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
+                    {/* Module Identity */}
+                    <div className="space-y-3">
+                        <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block">Module Identity</label>
+                        <div className="relative group">
+                            <input 
+                              type="text" 
+                              value={pluginName}
+                              onChange={(e) => setPluginName(e.target.value)}
+                              className="w-full bg-[#0a0a0a] border border-white/10 rounded-sm p-3 pl-4 text-xs font-mono text-cyan-400 focus:border-cyan-500/50 focus:outline-none"
+                              placeholder="MyPluginName"
+                            />
                         </div>
-                    )}
+                    </div>
+                    
+                    <div className="space-y-3">
+                        <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block">Architecture Template</label>
+                        <div className="grid grid-cols-2 gap-2">
+                            {[PluginType.VISUAL_EQ, PluginType.MULTIBAND, PluginType.COMPRESSOR, PluginType.SATURATION, PluginType.SHINE, PluginType.HYBRID_EQ_DYN, PluginType.REVERB, PluginType.DELAY].map(type => (
+                                <button 
+                                key={type}
+                                onClick={() => addModule(type)}
+                                className="text-xs font-medium text-left px-3 py-3 bg-[#0a0a0a] border border-white/5 rounded-sm hover:border-cyan-500/30 transition-all"
+                                >
+                                    <span className="text-neutral-400 hover:text-cyan-400">{type.replace('Visual ', '')}</span>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
                 </>
             )}
 
-            {/* --- GLOBAL MODULE IDENTITY --- */}
-            <div className="space-y-3">
-                <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block">Module Identity</label>
-                <div className="relative group">
-                    <input 
-                      type="text" 
-                      value={pluginName}
-                      onChange={(e) => setPluginName(e.target.value)}
-                      className="w-full bg-[#0a0a0a] border border-white/10 rounded-sm p-3 pl-4 text-xs font-mono text-cyan-400 focus:border-cyan-500/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/20 transition-all placeholder-neutral-800"
-                      placeholder="MyPluginName"
-                    />
-                    <span className="absolute right-3 top-3 text-neutral-700 font-mono text-xs pointer-events-none group-hover:text-neutral-500">_&gt;</span>
-                </div>
-            </div>
-
-            {/* --- DESIGNER MODE CONTENT --- */}
             {appMode === 'DESIGNER' && (
                 <div className="animate-in fade-in slide-in-from-right-4 space-y-8">
-                     <div className="w-full h-px bg-white/5"></div>
-                     
                      {selectedModuleId && activeModule ? (
                         <>
+                            {/* --- COMPONENT EDIT MODE --- */}
                             {activeComponent ? (
-                                /* --- EDIT COMPONENT VIEW --- */
-                                <div className="bg-[#0a0a0a] border border-white/10 rounded-sm p-4 space-y-4 relative animate-in slide-in-from-right-8">
+                                <div className="bg-[#0a0a0a] border border-white/10 rounded-sm p-4 space-y-5 relative animate-in slide-in-from-right-8 shadow-xl">
                                     <button 
                                         onClick={() => setSelectedComponentId(null)}
                                         className="flex items-center space-x-1 text-neutral-500 hover:text-white text-[10px] font-bold uppercase tracking-wider mb-2"
@@ -441,37 +898,185 @@ export default function App() {
                                     </button>
                                     
                                     <div className="flex items-center space-x-2 text-white mb-2 border-b border-white/5 pb-2">
-                                        {activeComponent.type === 'KNOB' ? <Activity size={14} className="text-purple-500"/> : <Tag size={14} className="text-amber-500"/>}
                                         <span className="text-xs font-bold uppercase">Edit {activeComponent.type}</span>
                                     </div>
 
-                                    <div className="space-y-3">
+                                    <div className="space-y-4">
                                         <div>
                                             <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Label</label>
                                             <input 
                                                 type="text" 
                                                 value={activeComponent.label}
                                                 onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { label: e.target.value })}
-                                                className="w-full bg-black border border-white/10 rounded p-2 text-xs text-white focus:border-purple-500/50 outline-none"
+                                                className="w-full bg-black border border-white/10 rounded p-2 text-xs text-white focus:border-cyan-500/50 outline-none"
                                             />
                                         </div>
                                         
-                                        {activeComponent.type === 'KNOB' && (
+                                        {/* Width & Align Control */}
+                                        {activeComponent.type !== 'RACK' && (
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Width (Col Span)</label>
+                                                    <div className="grid grid-cols-4 gap-1">
+                                                        {[1, 2, 3, 4].map(span => (
+                                                            <button
+                                                                key={span}
+                                                                onClick={() => updateComponent(activeModule.id, activeComponent.id, { colSpan: span })}
+                                                                className={`h-6 border rounded text-[10px] font-bold flex items-center justify-center transition-all
+                                                                    ${(activeComponent.colSpan || 1) === span 
+                                                                        ? 'bg-white text-black border-white' 
+                                                                        : 'bg-black border-white/10 text-neutral-500 hover:border-white/30'}
+                                                                `}
+                                                            >
+                                                                {span === 4 ? 'F' : span}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                     <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Alignment</label>
+                                                     <div className="flex bg-black border border-white/10 rounded p-0.5">
+                                                        {['start', 'center', 'end', 'stretch'].map((a: any) => (
+                                                            <button 
+                                                                key={a}
+                                                                onClick={() => updateComponent(activeModule.id, activeComponent.id, { align: a })}
+                                                                className={`flex-1 h-6 flex items-center justify-center rounded-sm ${activeComponent.align === a || (!activeComponent.align && a === 'center') ? 'bg-white/20 text-white' : 'text-neutral-600'}`}
+                                                                title={a}
+                                                            >
+                                                                {a === 'start' ? <AlignLeft size={10}/> : a === 'end' ? <AlignRight size={10}/> : a === 'stretch' ? <AlignJustify size={10}/> : <AlignCenter size={10}/>}
+                                                            </button>
+                                                        ))}
+                                                     </div>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Section Controls */}
+                                        {activeComponent.type === 'SECTION' && (
+                                            <>
+                                                <div>
+                                                    <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Variant</label>
+                                                    <select 
+                                                        value={activeComponent.sectionVariant || 'card'}
+                                                        onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { sectionVariant: e.target.value as SectionVariant })}
+                                                        className="w-full bg-black border border-white/10 rounded p-2 text-xs text-gray-300 outline-none"
+                                                    >
+                                                        <option value="card">Card (Bordered)</option>
+                                                        <option value="solid">Solid (Dark)</option>
+                                                        <option value="simple">Simple (Divider)</option>
+                                                        <option value="glass_row">Glass Row (Horizontal)</option>
+                                                        <option value="minimal">Minimal (Transparent)</option>
+                                                    </select>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-4">
+                                                    <div>
+                                                        <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Direction</label>
+                                                        <div className="flex bg-black border border-white/10 rounded p-0.5">
+                                                            <button 
+                                                                onClick={() => updateComponent(activeModule.id, activeComponent.id, { layoutDirection: 'column' })}
+                                                                className={`flex-1 h-6 flex items-center justify-center rounded-sm ${activeComponent.layoutDirection !== 'row' ? 'bg-white/20 text-white' : 'text-neutral-600'}`}
+                                                            >
+                                                                <Grid size={10} />
+                                                            </button>
+                                                            <button 
+                                                                onClick={() => updateComponent(activeModule.id, activeComponent.id, { layoutDirection: 'row' })}
+                                                                className={`flex-1 h-6 flex items-center justify-center rounded-sm ${activeComponent.layoutDirection === 'row' ? 'bg-white/20 text-white' : 'text-neutral-600'}`}
+                                                            >
+                                                                <ArrowLeftRight size={10} />
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                    {activeComponent.layoutDirection !== 'row' && (
+                                                        <div>
+                                                            <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Grid Cols</label>
+                                                            <input 
+                                                                type="number" 
+                                                                min="1" max="8"
+                                                                value={activeComponent.gridCols || 4}
+                                                                onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { gridCols: parseInt(e.target.value) })}
+                                                                className="w-full bg-black border border-white/10 rounded p-1.5 text-xs text-white text-center"
+                                                            />
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </>
+                                        )}
+
+                                        {/* Rack Specific */}
+                                        {activeComponent.type === 'RACK' && (
+                                            <>
+                                                <div>
+                                                    <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Rack Style</label>
+                                                    <select 
+                                                        value={activeComponent.rackVariant || 'basic'}
+                                                        onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { rackVariant: e.target.value as RackVariant })}
+                                                        className="w-full bg-black border border-white/10 rounded p-2 text-xs text-gray-300 outline-none"
+                                                    >
+                                                        <option value="basic">Basic (Dark)</option>
+                                                        <option value="industrial">Industrial (Texture)</option>
+                                                        <option value="metal">Brushed Metal</option>
+                                                        <option value="framed">Framed</option>
+                                                        <option value="cyber">Cyber (Neon Grid)</option>
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Slots (Rows)</label>
+                                                    <div className="flex items-center space-x-2">
+                                                        {[1, 2, 3, 4, 6].map(n => (
+                                                            <button
+                                                                key={n}
+                                                                onClick={() => updateComponent(activeModule.id, activeComponent.id, { rackSplits: n })}
+                                                                className={`w-8 h-8 border rounded text-xs font-bold flex items-center justify-center
+                                                                    ${(activeComponent.rackSplits || 4) === n ? 'bg-white text-black' : 'bg-black border-white/10 text-neutral-500'}
+                                                                `}
+                                                            >
+                                                                {n}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Height (px)</label>
+                                                    <input 
+                                                        type="number" 
+                                                        value={activeComponent.height || 400}
+                                                        onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { height: parseInt(e.target.value) })}
+                                                        className="w-full bg-black border border-white/10 rounded p-2 text-xs text-white"
+                                                    />
+                                                </div>
+                                            </>
+                                        )}
+
+                                        {/* Component Type Specific Controls */}
+                                        {(activeComponent.type === 'KNOB' || activeComponent.type === 'SLIDER' || activeComponent.type === 'SWITCH' || activeComponent.type === 'SCREW') && (
                                             <>
                                                 <div>
                                                     <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Parameter Link</label>
                                                     <select 
                                                         value={activeComponent.paramId}
                                                         onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { paramId: e.target.value })}
-                                                        className="w-full bg-black border border-white/10 rounded p-2 text-xs text-gray-300 outline-none focus:border-purple-500/50"
+                                                        className="w-full bg-black border border-white/10 rounded p-2 text-xs text-gray-300 outline-none focus:border-cyan-500/50"
                                                     >
                                                         {PLUGIN_DEFINITIONS[activeModule.type].params.map(p => (
                                                             <option key={p.id} value={p.id}>{p.name} ({p.id})</option>
                                                         ))}
                                                     </select>
                                                 </div>
+                                                
+                                                {/* Size Control */}
+                                                {(activeComponent.type === 'KNOB' || activeComponent.type === 'SCREW') && (
+                                                    <div>
+                                                        <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Size (px)</label>
+                                                        <input 
+                                                            type="number" 
+                                                            value={activeComponent.size || (activeComponent.type === 'KNOB' ? 56 : 14)}
+                                                            onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { size: parseInt(e.target.value) })}
+                                                            className="w-full bg-black border border-white/10 rounded p-2 text-xs text-white"
+                                                        />
+                                                    </div>
+                                                )}
 
-                                                <div className="grid grid-cols-2 gap-3">
+                                                <div className="grid grid-cols-2 gap-4">
                                                     <div>
                                                         <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Style</label>
                                                         <select 
@@ -480,40 +1085,38 @@ export default function App() {
                                                             className="w-full bg-black border border-white/10 rounded p-2 text-xs text-gray-300 outline-none"
                                                         >
                                                             <option value="classic">Classic</option>
-                                                            <option value="soft">Soft</option>
+                                                            <option value="soft">Soft/Flat</option>
                                                             <option value="tech">Tech</option>
+                                                            <option value="cyber">Cyber (Neon)</option>
+                                                            <option value="ring">Ring (Glow)</option>
+                                                            <option value="analog">Analog (Real)</option>
                                                         </select>
                                                     </div>
-                                                    <div>
-                                                        <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Color</label>
-                                                        <input 
-                                                            type="color" 
-                                                            value={activeComponent.color || '#3b82f6'}
-                                                            onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { color: e.target.value })}
-                                                            className="w-full h-8 bg-black border border-white/10 rounded cursor-pointer"
-                                                        />
-                                                    </div>
+                                                    <ColorPicker 
+                                                        label="Accent Color"
+                                                        value={activeComponent.color || '#3b82f6'}
+                                                        onChange={(c) => updateComponent(activeModule.id, activeComponent.id, { color: c })}
+                                                    />
                                                 </div>
+                                                
+                                                {/* Slider Specific */}
+                                                {activeComponent.type === 'SLIDER' && (
+                                                    <div>
+                                                        <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Orientation</label>
+                                                        <div className="flex bg-black border border-white/10 rounded p-1">
+                                                            <button onClick={() => updateComponent(activeModule.id, activeComponent.id, { orientation: 'vertical' })} className={`flex-1 text-xs py-1 ${activeComponent.orientation !== 'horizontal' ? 'bg-white/20' : ''}`}>Vert</button>
+                                                            <button onClick={() => updateComponent(activeModule.id, activeComponent.id, { orientation: 'horizontal' })} className={`flex-1 text-xs py-1 ${activeComponent.orientation === 'horizontal' ? 'bg-white/20' : ''}`}>Horz</button>
+                                                        </div>
+                                                    </div>
+                                                )}
                                             </>
-                                        )}
-                                        
-                                        {activeComponent.type === 'HEADER' && (
-                                             <div>
-                                                <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Text Color</label>
-                                                <input 
-                                                    type="color" 
-                                                    value={activeComponent.color || '#ffffff'}
-                                                    onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { color: e.target.value })}
-                                                    className="w-full h-8 bg-black border border-white/10 rounded cursor-pointer"
-                                                />
-                                            </div>
                                         )}
                                     </div>
 
-                                    <div className="pt-2 border-t border-white/5">
+                                    <div className="pt-4 border-t border-white/5 mt-4">
                                         <button 
                                             onClick={() => removeComponent(activeModule.id, activeComponent.id)}
-                                            className="w-full flex items-center justify-center space-x-2 py-2 bg-red-900/20 hover:bg-red-900/40 text-red-400 rounded text-xs font-bold transition-colors"
+                                            className="w-full flex items-center justify-center space-x-2 py-3 bg-red-900/10 hover:bg-red-900/30 border border-red-900/20 hover:border-red-500/50 text-red-400 rounded text-xs font-bold transition-all"
                                         >
                                             <Trash2 size={12} />
                                             <span>Delete Component</span>
@@ -521,122 +1124,124 @@ export default function App() {
                                     </div>
                                 </div>
                             ) : (
-                                /* --- LAYOUT OVERVIEW --- */
-                                <div className="space-y-6 animate-in slide-in-from-left-4">
-                                     
-                                     {/* Module Labels */}
-                                     <div className="space-y-4">
-                                        <div className="flex items-center justify-between">
-                                            <div className="flex items-center text-cyan-500">
-                                                <LayoutTemplate size={12} className="mr-2" />
-                                                <span className="text-[10px] font-bold uppercase tracking-widest">Module Settings</span>
-                                            </div>
-                                        </div>
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <div className="space-y-2">
-                                                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest block">Header Title</label>
-                                                <input 
-                                                    type="text" 
-                                                    value={activeModule.title || ''}
-                                                    onChange={(e) => updateModuleState(activeModule.id, { title: e.target.value })}
-                                                    className="w-full bg-[#0a0a0a] border border-white/10 rounded-sm p-2 text-xs text-white focus:border-cyan-500/50 focus:outline-none"
-                                                />
-                                            </div>
-                                            <div className="space-y-2">
-                                                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest block">Inner Label</label>
-                                                <input 
-                                                    type="text" 
-                                                    value={activeModule.innerLabel || ''}
-                                                    placeholder="Dynamic"
-                                                    onChange={(e) => updateModuleState(activeModule.id, { innerLabel: e.target.value })}
-                                                    className="w-full bg-[#0a0a0a] border border-white/10 rounded-sm p-2 text-xs text-white focus:border-cyan-500/50 focus:outline-none"
-                                                />
-                                            </div>
-                                        </div>
-                                    </div>
-                                    
-                                    {/* Element List */}
-                                    <div className="space-y-2">
-                                        <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block flex items-center">
-                                            <List size={12} className="mr-2" /> Interface Structure
-                                        </label>
-                                        <div className="max-h-64 overflow-y-auto custom-scrollbar border border-white/10 rounded bg-[#0a0a0a]">
-                                            {activeModule.layout?.map((comp, i) => (
-                                                <div 
-                                                    key={comp.id}
-                                                    className="flex items-center justify-between p-2 border-b border-white/5 last:border-0 hover:bg-white/5 group transition-colors cursor-pointer"
-                                                    onClick={() => setSelectedComponentId(comp.id)}
+                                <>
+                                    {/* --- OVERVIEW / ADD MODE --- */}
+                                    <div className="space-y-6 animate-in slide-in-from-left-4">
+                                        <div className="space-y-2">
+                                            <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block">Add Elements</label>
+                                            <div className="grid grid-cols-3 gap-2">
+                                                <button 
+                                                    onClick={() => addComponentToLayout(activeModule.id, {
+                                                        id: generateId(),
+                                                        type: 'KNOB',
+                                                        label: 'Knob',
+                                                        paramId: 'output',
+                                                        color: activeModule.color,
+                                                        style: 'classic',
+                                                        size: 56,
+                                                        colSpan: 1
+                                                    })}
+                                                    className="flex flex-col items-center justify-center p-3 bg-[#0a0a0a] border border-white/10 hover:border-purple-500/50 hover:bg-purple-500/5 rounded transition-all group"
                                                 >
-                                                    <div className="flex items-center space-x-3">
-                                                        <span className="text-[9px] text-neutral-600 font-mono">{i + 1}</span>
-                                                        {comp.type === 'KNOB' && <Activity size={12} className="text-purple-500" />}
-                                                        {comp.type === 'HEADER' && <Tag size={12} className="text-amber-500" />}
-                                                        {comp.type === 'SPACER' && <Box size={12} className="text-neutral-500" />}
-                                                        <span className="text-xs text-neutral-300 truncate w-32">{comp.label}</span>
-                                                    </div>
-                                                    <button 
-                                                        onClick={(e) => { e.stopPropagation(); removeComponent(activeModule.id, comp.id); }}
-                                                        className="text-neutral-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                                                    >
-                                                        <Trash2 size={12} />
-                                                    </button>
-                                                </div>
-                                            ))}
-                                            {(!activeModule.layout || activeModule.layout.length === 0) && (
-                                                <div className="p-4 text-center text-neutral-600 text-xs italic">
-                                                    No elements added.
-                                                </div>
-                                            )}
+                                                    <Activity size={16} className="text-neutral-500 group-hover:text-purple-500 mb-2" />
+                                                    <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Knob</span>
+                                                </button>
+                                                <button 
+                                                    onClick={() => addComponentToLayout(activeModule.id, {
+                                                        id: generateId(),
+                                                        type: 'SLIDER',
+                                                        label: 'Fader',
+                                                        paramId: 'output',
+                                                        color: activeModule.color,
+                                                        style: 'classic',
+                                                        colSpan: 1,
+                                                        orientation: 'vertical'
+                                                    })}
+                                                    className="flex flex-col items-center justify-center p-3 bg-[#0a0a0a] border border-white/10 hover:border-blue-500/50 hover:bg-blue-500/5 rounded transition-all group"
+                                                >
+                                                    <Sliders size={16} className="text-neutral-500 group-hover:text-blue-500 mb-2" />
+                                                    <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Slider</span>
+                                                </button>
+                                                <button 
+                                                    onClick={() => addComponentToLayout(activeModule.id, {
+                                                        id: generateId(),
+                                                        type: 'SWITCH',
+                                                        label: 'Switch',
+                                                        paramId: 'output',
+                                                        color: activeModule.color,
+                                                        style: 'classic',
+                                                        colSpan: 1
+                                                    })}
+                                                    className="flex flex-col items-center justify-center p-3 bg-[#0a0a0a] border border-white/10 hover:border-green-500/50 hover:bg-green-500/5 rounded transition-all group"
+                                                >
+                                                    <ToggleLeft size={16} className="text-neutral-500 group-hover:text-green-500 mb-2" />
+                                                    <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Switch</span>
+                                                </button>
+                                            </div>
+                                            <div className="grid grid-cols-3 gap-2 mt-2">
+                                                <button 
+                                                    onClick={() => addComponentToLayout(activeModule.id, {
+                                                        id: generateId(),
+                                                        type: 'SECTION',
+                                                        label: 'Group',
+                                                        color: '#ffffff',
+                                                        colSpan: 4,
+                                                        sectionVariant: 'minimal',
+                                                        layoutDirection: 'row', // Default to horizontal for grouping
+                                                        children: []
+                                                    })}
+                                                    className="flex flex-col items-center justify-center p-3 bg-[#0a0a0a] border border-white/10 hover:border-amber-500/50 hover:bg-amber-500/5 rounded transition-all group"
+                                                >
+                                                    <Columns size={16} className="text-neutral-500 group-hover:text-amber-500 mb-2" />
+                                                    <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Row/Group</span>
+                                                </button>
+                                                <button 
+                                                    onClick={() => addComponentToLayout(activeModule.id, {
+                                                        id: generateId(),
+                                                        type: 'RACK',
+                                                        label: 'Rack',
+                                                        colSpan: 1,
+                                                        rackSplits: 4,
+                                                        rackVariant: 'industrial',
+                                                        height: 400,
+                                                        children: []
+                                                    })}
+                                                    className="flex flex-col items-center justify-center p-3 bg-[#0a0a0a] border border-white/10 hover:border-cyan-500/50 hover:bg-cyan-500/5 rounded transition-all group"
+                                                >
+                                                    <Server size={16} className="text-neutral-500 group-hover:text-cyan-300 mb-2" />
+                                                    <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Rack</span>
+                                                </button>
+                                                <button 
+                                                    onClick={() => addComponentToLayout(activeModule.id, {
+                                                        id: generateId(),
+                                                        type: 'SCREW',
+                                                        label: 'Screw',
+                                                        colSpan: 1
+                                                    })}
+                                                    className="flex flex-col items-center justify-center p-3 bg-[#0a0a0a] border border-white/10 hover:border-zinc-500/50 hover:bg-zinc-500/5 rounded transition-all group"
+                                                >
+                                                    <Nut size={16} className="text-neutral-500 group-hover:text-zinc-300 mb-2" />
+                                                    <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Screw</span>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        
+                                        {/* --- STRUCTURE TREE --- */}
+                                        <div className="space-y-2 border-t border-white/5 pt-4">
+                                            <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block flex items-center justify-between">
+                                                <span>Structure</span>
+                                                <span className="text-[9px] text-neutral-700">Layers</span>
+                                            </label>
+                                            <div className="bg-[#080808] border border-white/5 rounded p-2 max-h-64 overflow-y-auto custom-scrollbar">
+                                                {activeModule.layout && activeModule.layout.length > 0 ? (
+                                                    <RenderSidebarTree components={activeModule.layout} />
+                                                ) : (
+                                                    <div className="text-[9px] text-neutral-600 p-2 text-center">Empty Layout</div>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
-
-                                     {/* Add Buttons */}
-                                     <div className="space-y-2">
-                                         <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block">Add Elements</label>
-                                         <div className="grid grid-cols-2 gap-2">
-                                            <button 
-                                                onClick={() => addComponentToLayout(activeModule.id, {
-                                                    id: generateId(),
-                                                    type: 'KNOB',
-                                                    label: 'New Knob',
-                                                    paramId: 'output',
-                                                    color: activeModule.color,
-                                                    style: 'classic',
-                                                    size: 56
-                                                })}
-                                                className="flex flex-col items-center justify-center p-4 bg-[#0a0a0a] border border-white/10 hover:border-purple-500/50 hover:bg-purple-500/5 rounded transition-all group"
-                                            >
-                                                <Activity size={20} className="text-neutral-500 group-hover:text-purple-500 mb-2" />
-                                                <span className="text-xs font-bold text-neutral-400 group-hover:text-white">Add Knob</span>
-                                            </button>
-                                            <button 
-                                                onClick={() => addComponentToLayout(activeModule.id, {
-                                                    id: generateId(),
-                                                    type: 'HEADER',
-                                                    label: 'Section Title',
-                                                    color: '#ffffff',
-                                                    size: 12
-                                                })}
-                                                className="flex flex-col items-center justify-center p-4 bg-[#0a0a0a] border border-white/10 hover:border-amber-500/50 hover:bg-amber-500/5 rounded transition-all group"
-                                            >
-                                                <Tag size={20} className="text-neutral-500 group-hover:text-amber-500 mb-2" />
-                                                <span className="text-xs font-bold text-neutral-400 group-hover:text-white">Add Header</span>
-                                            </button>
-                                            <button 
-                                                onClick={() => addComponentToLayout(activeModule.id, {
-                                                    id: generateId(),
-                                                    type: 'SPACER',
-                                                    label: 'Spacer',
-                                                    size: 24
-                                                })}
-                                                className="flex flex-col items-center justify-center p-4 bg-[#0a0a0a] border border-white/10 hover:border-neutral-500 hover:bg-white/5 rounded transition-all group col-span-2"
-                                            >
-                                                <Box size={20} className="text-neutral-500 group-hover:text-white mb-2" />
-                                                <span className="text-xs font-bold text-neutral-400 group-hover:text-white">Add Spacer</span>
-                                            </button>
-                                         </div>
-                                    </div>
-                                </div>
+                                </>
                             )}
                         </>
                      ) : (
@@ -646,62 +1251,6 @@ export default function App() {
                      )}
                 </div>
             )}
-
-            {/* --- ARCHITECT MODE CONTENT (Templates & Prompt) --- */}
-            {appMode === 'ARCHITECT' && (
-                <>
-                    <div className="space-y-3">
-                        <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block">Architecture Template</label>
-                        
-                        <div className="space-y-6">
-                            <div>
-                                <div className="flex items-center mb-2">
-                                    <div className="w-1 h-1 bg-purple-500 rounded-full mr-2"></div>
-                                    <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">FX Processors</span>
-                                </div>
-                                <div className="grid grid-cols-2 gap-2">
-                                    {[PluginType.VISUAL_EQ, PluginType.MULTIBAND, PluginType.COMPRESSOR, PluginType.SATURATION, PluginType.SHINE, PluginType.HYBRID_EQ_DYN, PluginType.REVERB, PluginType.DELAY].map(type => (
-                                        <button 
-                                        key={type}
-                                        onClick={() => addModule(type)}
-                                        className="relative group overflow-hidden text-xs font-medium text-left px-3 py-3 bg-[#0a0a0a] border border-white/5 rounded-sm hover:border-cyan-500/30 hover:bg-[#0f0f0f] transition-all active:scale-[0.98]"
-                                        >
-                                            <span className="relative z-10 text-neutral-400 group-hover:text-cyan-400 transition-colors">{type.replace('Visual ', '')}</span>
-                                            <div className="absolute inset-0 bg-cyan-500/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-
-                            <div>
-                                <div className="flex items-center mb-2">
-                                    <div className="w-1 h-1 bg-amber-500 rounded-full mr-2"></div>
-                                    <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">Generators</span>
-                                </div>
-                                <div className="grid grid-cols-2 gap-2">
-                                    <button 
-                                    onClick={() => addModule(PluginType.OSCILLATOR)}
-                                    className="relative group overflow-hidden text-xs font-medium text-left px-3 py-3 bg-[#0a0a0a] border border-white/5 rounded-sm hover:border-amber-500/30 hover:bg-[#0f0f0f] transition-all active:scale-[0.98]"
-                                    >
-                                        <span className="relative z-10 text-neutral-400 group-hover:text-amber-400 transition-colors">Oscillator</span>
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="space-y-3">
-                        <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block">Refinement Prompt</label>
-                        <textarea 
-                        value={userPrompt}
-                        onChange={(e) => setUserPrompt(e.target.value)}
-                        className="w-full h-32 bg-[#0a0a0a] border border-white/10 rounded-sm p-3 text-xs font-mono text-gray-300 focus:border-cyan-500/50 focus:outline-none transition-all placeholder-neutral-800 resize-none leading-relaxed"
-                        placeholder="Describe custom behavior...&#10;> 'Add saturation on high bands'&#10;> 'Make the compressor punchy'"
-                        />
-                    </div>
-                </>
-            )}
-
           </div>
 
           {/* Footer */}
@@ -709,443 +1258,133 @@ export default function App() {
               <button 
                   onClick={handleGenerateCode}
                   disabled={isGenerating || modules.length === 0}
-                  className="relative w-full h-14 bg-gradient-to-r from-cyan-900/20 to-blue-900/20 hover:from-cyan-900/40 hover:to-blue-900/40 border border-cyan-500/30 rounded-sm flex items-center justify-center space-x-3 transition-all active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed group overflow-hidden shadow-lg"
+                  className="w-full h-14 bg-cyan-900/20 hover:bg-cyan-900/40 border border-cyan-500/30 rounded flex items-center justify-center space-x-2 transition-all text-cyan-100 uppercase font-bold tracking-wider text-xs"
               >
-                  <div className="absolute inset-0 bg-cyan-500/5 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
-                  {isGenerating ? (
-                      <Loader2 className="animate-spin text-cyan-400 relative z-10" size={20} />
-                  ) : (
-                      <Cpu className="text-cyan-400 relative z-10" size={20} />
-                  )}
-                  <span className="text-xs font-black text-cyan-100 uppercase tracking-[0.15em] relative z-10">
-                      {isGenerating ? 'Compiling System...' : 'Generate Plugin Source'}
-                  </span>
+                  {isGenerating ? <Loader2 className="animate-spin" size={16}/> : <Cpu size={16}/>}
+                  <span>{isGenerating ? 'Generating...' : 'Generate Plugin Source'}</span>
               </button>
           </div>
-        </div>
+      </div>
 
-      {/* --- MAIN CONTENT AREA --- */}
+      {/* --- MAIN CONTENT --- */}
       <div className="flex-1 flex flex-col min-w-0 bg-[#020202] relative">
-        
-        {/* Header (Navigation) */}
-        <div className="h-16 border-b border-white/5 flex items-center justify-between px-6 bg-[#050505] flex-shrink-0 z-20">
-            
-            {/* Left: Audio Control */}
-            <div className="flex items-center space-x-4 w-48">
+        <div className="h-16 border-b border-white/5 flex items-center justify-between px-6 bg-[#050505] shrink-0 z-20">
+             {/* Audio & Transport */}
+             <div className="flex items-center space-x-4">
                  <div className="relative group">
-                    <input 
-                        type="file" 
-                        accept="audio/*"
-                        onChange={handleFileUpload}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                    />
-                    <button className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border transition-all ${audioFile ? 'bg-cyan-950/30 border-cyan-900 text-cyan-400' : 'bg-[#0a0a0a] border-white/5 text-neutral-500 hover:text-neutral-300 hover:border-white/10'}`}>
-                        <PlayCircle size={14} />
-                        <span className="text-[10px] font-bold uppercase tracking-wider">{audioFile ? 'Source Loaded' : 'Load Audio'}</span>
+                    <input type="file" accept="audio/*" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"/>
+                    <button className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border transition-all ${audioFile ? 'bg-cyan-950/30 border-cyan-900 text-cyan-400' : 'bg-[#0a0a0a] border-white/5 text-neutral-500'}`}>
+                        <PlayCircle size={14} /> <span className="text-[10px] font-bold uppercase tracking-wider">Source</span>
                     </button>
                  </div>
-                 {audioFile && (
-                     <audio 
-                        ref={audioRef} 
-                        src={audioFile} 
-                        onTimeUpdate={handleTimeUpdate}
-                        onLoadedMetadata={handleLoadedMetadata}
-                        onPlay={() => setIsPlaying(true)}
-                        onPause={() => setIsPlaying(false)}
-                        onEnded={handleAudioEnded}
-                        className="hidden" 
-                     />
-                 )}
-            </div>
+                 {audioFile && <audio ref={audioRef} src={audioFile} onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime || 0)} onLoadedMetadata={() => {setDuration(audioRef.current?.duration || 0); audioEngine.loadSource(audioRef.current!);}} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} className="hidden" />}
+             </div>
 
-            {/* Center: Mode Switcher */}
-            <div className="flex items-center bg-[#0a0a0a] p-1 rounded-full border border-white/5">
-                <button 
-                    onClick={() => setAppMode('ARCHITECT')}
-                    className={`flex items-center space-x-2 px-6 py-1.5 rounded-full transition-all ${appMode === 'ARCHITECT' ? 'bg-neutral-800 text-white shadow-sm' : 'text-neutral-600 hover:text-neutral-400'}`}
-                >
-                    <Layers size={14} />
-                    <span className="text-[10px] font-black uppercase tracking-widest">Architect</span>
-                </button>
-                
-                <div className="w-px h-3 bg-white/5 mx-1"></div>
-
-                <button 
-                    onClick={() => setAppMode('DESIGNER')}
-                    className={`flex items-center space-x-2 px-6 py-1.5 rounded-full transition-all ${appMode === 'DESIGNER' ? 'bg-neutral-800 text-white shadow-sm' : 'text-neutral-600 hover:text-neutral-400'}`}
-                >
-                    <PenTool size={14} />
-                    <span className="text-[10px] font-black uppercase tracking-widest">Designer</span>
-                </button>
-
-                <div className="w-px h-3 bg-white/5 mx-1"></div>
-
-                <button 
-                    onClick={() => setAppMode('ENGINEER')}
-                    className={`flex items-center space-x-2 px-6 py-1.5 rounded-full transition-all ${appMode === 'ENGINEER' ? 'bg-neutral-800 text-white shadow-sm' : 'text-neutral-600 hover:text-neutral-400'}`}
-                >
-                    <Terminal size={14} />
-                    <span className="text-[10px] font-black uppercase tracking-widest">Engineer</span>
-                </button>
-            </div>
-            
-            {/* Right: Actions */}
-            <div className="w-48 flex justify-end">
-                {generatedCode && (
-                    <button 
-                    onClick={handleDownloadVst}
-                    className="flex items-center space-x-2 text-neutral-500 hover:text-cyan-400 transition-colors group"
-                    >
-                        <span className="text-[10px] font-bold uppercase tracking-wider opacity-0 group-hover:opacity-100 transition-opacity">Export C++</span>
-                        <div className="w-8 h-8 rounded-full bg-[#0a0a0a] border border-white/10 flex items-center justify-center group-hover:border-cyan-500/50">
-                            <Download size={14} />
-                        </div>
-                    </button>
-                )}
-            </div>
+             <div className="flex items-center bg-[#0a0a0a] p-1 rounded-full border border-white/5">
+                {['ARCHITECT', 'DESIGNER', 'ENGINEER'].map(mode => (
+                    <button key={mode} onClick={() => setAppMode(mode as AppMode)} className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all ${appMode === mode ? 'bg-neutral-800 text-white' : 'text-neutral-600 hover:text-neutral-400'}`}>{mode}</button>
+                ))}
+             </div>
+             <div className="w-24"></div>
         </div>
 
-        {/* Viewport */}
-        <div className="flex-1 relative overflow-hidden bg-[#020202] flex flex-col">
-            
-            {/* Grid Background */}
-            <div className="absolute inset-0 pointer-events-none z-0" 
-                style={{ 
-                    backgroundImage: 'linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)', 
-                    backgroundSize: '50px 50px',
-                    maskImage: 'linear-gradient(to bottom, black 40%, transparent 100%)'
-                }}>
+        {/* Top Merge Bar */}
+        {appMode === 'ARCHITECT' && selectedModules.length > 0 && (
+            <div className="fixed top-24 left-1/2 -translate-x-1/2 bg-[#09090b] border border-white/10 px-6 py-3 rounded-full shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex items-center space-x-6 z-50 animate-in slide-in-from-top-4 fade-in border-t border-white/20 backdrop-blur-xl">
+                 <span className="text-xs font-bold text-white flex items-center">
+                     <div className="w-5 h-5 bg-amber-500 rounded-full flex items-center justify-center text-black text-[10px] mr-2">{selectedModules.length}</div>
+                     Selected
+                 </span>
+                 <div className="h-4 w-px bg-white/10"></div>
+                 <button 
+                    onClick={combineSelected}
+                    disabled={!canCombine}
+                    className={`flex items-center space-x-2 px-4 py-2 rounded-full text-xs font-bold uppercase tracking-wider transition-all
+                        ${canCombine 
+                            ? 'bg-amber-500 text-black hover:bg-amber-400' 
+                            : 'bg-white/5 text-neutral-600 cursor-not-allowed'}
+                    `}
+                 >
+                     <GitMerge size={14} />
+                     <span>Merge</span>
+                 </button>
+                 <button 
+                     onClick={clearSelection}
+                     className="p-2 rounded-full hover:bg-white/10 text-neutral-400 hover:text-white transition-colors"
+                 >
+                     <X size={14} />
+                 </button>
             </div>
-            
-            {/* Combine Floating Button */}
-            {(appMode === 'ARCHITECT' || appMode === 'DESIGNER') && canCombine && (
-                <div className="absolute top-6 left-1/2 -translate-x-1/2 z-40 animate-in slide-in-from-top-4 fade-in">
-                    <button 
-                        onClick={combineSelected}
-                        className="bg-amber-500 hover:bg-amber-400 text-black font-bold px-6 py-2 rounded-full shadow-[0_0_30px_rgba(245,158,11,0.4)] flex items-center space-x-2 transition-transform hover:scale-105"
-                    >
-                        <Merge size={16} />
-                        <span className="text-xs uppercase tracking-wider">Combine {selectedModules.length} Modules</span>
-                    </button>
+        )}
+
+        <div className="flex-1 relative overflow-y-auto custom-scrollbar p-10 bg-[#020202]">
+             {(appMode === 'ARCHITECT' || appMode === 'DESIGNER') && modules.length > 0 && (
+                 <div className="max-w-6xl mx-auto space-y-8 pb-32">
+                     
+                     {/* Visualizer */}
+                     <div className={`transition-all duration-700 ease-[cubic-bezier(0.25,1,0.5,1)] overflow-hidden ${isPlaying ? 'max-h-[300px] opacity-100 mb-8 translate-y-0' : 'max-h-0 opacity-0 mb-0 -translate-y-4'}`}>
+                         <div className="bg-[#050505] rounded border border-white/5 shadow-2xl p-4 relative">
+                             <Visualizer mode={visualizerMode} />
+                         </div>
+                     </div>
+
+                     {/* Modules */}
+                     <div className="space-y-4">
+                        {modules.map((module) => (
+                            <div 
+                                key={module.id} 
+                                onClick={() => selectForSidebar(module.id)}
+                                className={`bg-[#080808] rounded border transition-all relative overflow-hidden
+                                    ${selectedModuleId === module.id ? 'border-cyan-500/30 shadow-lg shadow-cyan-900/10' : 'border-white/5 hover:border-white/10'}
+                                    ${module.selected ? 'ring-2 ring-amber-500/50 border-amber-500/50' : ''}
+                                `}
+                            >
+                                <div className="h-10 flex items-center justify-between px-4 border-b border-white/5 bg-white/[0.01]">
+                                    <div className="flex items-center space-x-3">
+                                        <button onClick={(e) => {e.stopPropagation(); toggleBypass(module.id)}} className={`w-2.5 h-2.5 rounded-full ${module.enabled ? 'shadow-[0_0_8px_currentColor]' : 'bg-neutral-800'}`} style={{ backgroundColor: module.enabled ? module.color : '' }} />
+                                        <span className="text-[11px] font-bold text-gray-300 tracking-widest uppercase">{module.title || module.type}</span>
+                                    </div>
+                                    {appMode === 'ARCHITECT' && (
+                                        <div className="flex items-center space-x-2 z-20">
+                                             <button onClick={(e) => { e.stopPropagation(); toggleSelection(module.id); }} className={`text-[10px] uppercase tracking-wider font-bold px-2 py-1 rounded border transition-colors ${module.selected ? 'bg-amber-500 text-black border-amber-500' : 'border-white/10 text-neutral-400 hover:bg-white/10'}`}>
+                                                 {module.selected ? <Check size={12}/> : 'Select'}
+                                             </button>
+                                             <button onClick={(e) => { e.stopPropagation(); removeModule(module.id); }} className="text-neutral-700 hover:text-red-500 p-1"><X size={12} /></button>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="p-6">
+                                    <div className="grid grid-cols-4 gap-4 items-start">
+                                        {module.layout ? module.layout.map((comp, i) => (
+                                            <RenderComponent key={comp.id} component={comp} module={module} index={i} />
+                                        )) : (
+                                            <div className="col-span-4 text-center text-neutral-600 text-xs">No layout defined</div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                     </div>
+                 </div>
+             )}
+             
+             {modules.length === 0 && (
+                 <div className="h-full flex flex-col items-center justify-center text-neutral-500">
+                     <Box size={48} className="mb-4 opacity-20"/>
+                     <p className="text-sm">Add a module from the architect panel to begin.</p>
+                 </div>
+             )}
+
+            {appMode === 'ENGINEER' && generatedCode && (
+                <div className="max-w-6xl mx-auto grid grid-cols-2 gap-6 h-[600px]">
+                    <div className="bg-[#080808] border border-white/5 rounded p-4 flex flex-col"><h3 className="text-xs font-bold text-neutral-400 mb-2">HEADER</h3><pre className="flex-1 overflow-auto text-[10px] font-mono text-neutral-400">{generatedCode.headerCode}</pre></div>
+                    <div className="bg-[#080808] border border-white/5 rounded p-4 flex flex-col"><h3 className="text-xs font-bold text-neutral-400 mb-2">SOURCE</h3><pre className="flex-1 overflow-auto text-[10px] font-mono text-cyan-100/80">{generatedCode.cppCode}</pre></div>
                 </div>
             )}
-
-            {/* Scrollable Content */}
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-10 relative z-10">
-                
-                {/* --- EMPTY STATE --- */}
-                {(appMode === 'ARCHITECT' || appMode === 'DESIGNER') && modules.length === 0 && (
-                    <div className="h-full flex flex-col items-center justify-center pb-20 select-none">
-                        <div className="w-24 h-24 rounded-full bg-[#0a0a0a] border border-white/5 flex items-center justify-center mb-8 shadow-2xl relative group">
-                            <div className="absolute inset-0 rounded-full border border-cyan-500/20 scale-110 opacity-0 group-hover:opacity-100 transition-all duration-700"></div>
-                            <Box size={32} className="text-neutral-700 group-hover:text-cyan-500 transition-colors duration-500" />
-                        </div>
-                        <h2 className="text-xl font-black text-white tracking-tight mb-2">SYSTEM UNINITIALIZED</h2>
-                        <p className="text-neutral-500 text-sm max-w-xs text-center leading-relaxed mb-8">
-                            The DSP architecture is currently empty. Select a template from the sidebar to begin architecting your plugin.
-                        </p>
-                        {appMode === 'DESIGNER' && (
-                            <button 
-                                onClick={() => setAppMode('ARCHITECT')}
-                                className="flex items-center space-x-2 text-cyan-500 text-xs font-bold uppercase tracking-widest hover:text-cyan-400"
-                            >
-                                <span>Open Architect Mode</span>
-                                <ChevronRight size={12} />
-                            </button>
-                        )}
-                    </div>
-                )}
-
-                {/* --- ARCHITECT / DESIGNER VIEW --- */}
-                {(appMode === 'ARCHITECT' || appMode === 'DESIGNER') && modules.length > 0 && (
-                    <div className={`max-w-6xl mx-auto space-y-8 pb-32 transition-all duration-500 ${appMode === 'DESIGNER' ? 'scale-100' : 'scale-100'}`}>
-                         
-                         {/* Master Visualizer */}
-                         <div className="bg-[#050505] rounded-sm border border-white/5 shadow-2xl overflow-hidden relative group">
-                            <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-cyan-500/50 to-transparent opacity-50"></div>
-                            <div className="p-4 relative z-10">
-                                <div className="flex justify-between items-center mb-4 opacity-50">
-                                    <div className="flex items-center space-x-2 text-cyan-500">
-                                        <Activity size={14} />
-                                        <span className="text-[10px] font-bold uppercase tracking-widest">Output Spectrum</span>
-                                    </div>
-                                    
-                                    <div className="flex items-center space-x-1 bg-neutral-900 rounded-full p-0.5 border border-white/5">
-                                        <button 
-                                            onClick={() => setVisualizerMode('SPECTRUM')}
-                                            className={`p-1 rounded-full transition-colors ${visualizerMode === 'SPECTRUM' ? 'bg-cyan-500/20 text-cyan-400' : 'text-neutral-600 hover:text-neutral-400'}`}
-                                        >
-                                            <Activity size={12} />
-                                        </button>
-                                        <button 
-                                            onClick={() => setVisualizerMode('WAVEFORM')}
-                                            className={`p-1 rounded-full transition-colors ${visualizerMode === 'WAVEFORM' ? 'bg-cyan-500/20 text-cyan-400' : 'text-neutral-600 hover:text-neutral-400'}`}
-                                        >
-                                            <Waves size={12} />
-                                        </button>
-                                        <button 
-                                            onClick={() => setVisualizerMode('SPECTROGRAM')}
-                                            className={`p-1 rounded-full transition-colors ${visualizerMode === 'SPECTROGRAM' ? 'bg-cyan-500/20 text-cyan-400' : 'text-neutral-600 hover:text-neutral-400'}`}
-                                        >
-                                            <Grid size={12} />
-                                        </button>
-                                    </div>
-
-                                    <span className="text-[10px] font-mono text-neutral-600">44.1kHz / 32-bit</span>
-                                </div>
-                                <Visualizer mode={visualizerMode} />
-                            </div>
-                         </div>
-
-                         {/* Rack */}
-                         <div className="space-y-4">
-                            {modules.map((module, index) => (
-                                <div 
-                                    key={module.id} 
-                                    draggable={appMode === 'ARCHITECT'}
-                                    onDragStart={() => handleDragStart(index)}
-                                    onDragOver={(e) => handleDragOver(e, index)}
-                                    onDragEnd={handleDragEnd}
-                                    onClick={(e) => {
-                                        if(!(e.target as HTMLElement).closest('button') && !(e.target as HTMLElement).closest('select') && !(e.target as HTMLElement).closest('input')) {
-                                            selectForSidebar(module.id);
-                                        }
-                                    }}
-                                    className={`relative bg-[#080808] rounded-sm border transition-all duration-300 
-                                        ${draggedItemIndex === index ? 'opacity-40' : ''} 
-                                        ${!module.enabled ? 'opacity-60 grayscale' : ''}
-                                        ${module.selected ? 'border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.1)]' : (selectedModuleId === module.id ? 'border-cyan-500/30' : 'border-white/5 hover:border-white/10')}
-                                        shadow-lg
-                                    `}
-                                >
-                                    {/* Module Header */}
-                                    <div className="h-9 flex items-center justify-between px-4 bg-white/[0.01] border-b border-white/[0.03]">
-                                        <div className="flex items-center space-x-4">
-                                            {appMode === 'ARCHITECT' && (
-                                                <div className="cursor-grab active:cursor-grabbing text-neutral-700 hover:text-neutral-500">
-                                                    <GripVertical size={12} />
-                                                </div>
-                                            )}
-                                            
-                                            <div className="flex items-center space-x-3">
-                                                <button 
-                                                    onClick={() => toggleBypass(module.id)}
-                                                    className={`w-2.5 h-2.5 rounded-full transition-all duration-300 ${module.enabled ? 'shadow-[0_0_8px_currentColor]' : 'bg-neutral-800 shadow-none'}`} 
-                                                    style={{ backgroundColor: module.enabled ? module.color : '' }}
-                                                />
-                                                <span className="text-[11px] font-bold text-gray-300 tracking-widest uppercase">
-                                                    {module.title || module.type}
-                                                </span>
-                                                
-                                                {(module.type === PluginType.SATURATION || (module.nestedModules?.includes(PluginType.SATURATION))) && (
-                                                    <div className="flex items-center space-x-1 ml-2 border-l border-white/10 pl-3">
-                                                        <span className="text-[9px] text-neutral-600 font-bold uppercase">MODE:</span>
-                                                        <select 
-                                                            value={module.saturationMode || 'TUBE'}
-                                                            onChange={(e) => updateModuleState(module.id, { saturationMode: e.target.value as any })}
-                                                            className="bg-transparent text-[9px] font-mono text-orange-500 outline-none border-none cursor-pointer uppercase"
-                                                        >
-                                                            {SAT_MODES.map(m => <option key={m} value={m}>{m}</option>)}
-                                                        </select>
-                                                    </div>
-                                                )}
-                                                
-                                                {(module.type === PluginType.SHINE || (module.nestedModules?.includes(PluginType.SHINE))) && (
-                                                    <div className="flex items-center space-x-1 ml-2 border-l border-white/10 pl-3">
-                                                        <span className="text-[9px] text-neutral-600 font-bold uppercase">SHINE:</span>
-                                                        <select 
-                                                            value={module.shineMode || 'AIR'}
-                                                            onChange={(e) => updateModuleState(module.id, { shineMode: e.target.value as any })}
-                                                            className="bg-transparent text-[9px] font-mono text-cyan-400 outline-none border-none cursor-pointer uppercase"
-                                                        >
-                                                            {SHINE_MODES.map(m => <option key={m} value={m}>{m}</option>)}
-                                                        </select>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-
-                                        <div className="flex items-center space-x-2">
-                                            {(appMode === 'ARCHITECT' || appMode === 'DESIGNER') && (
-                                                 <button 
-                                                 onClick={(e) => { e.stopPropagation(); toggleSelection(module.id); }}
-                                                 className={`text-[10px] uppercase tracking-wider font-bold px-2 py-1 rounded border transition-colors 
-                                                    ${module.selected ? 'bg-amber-500/10 border-amber-500/50 text-amber-500' : 'border-transparent text-neutral-600 hover:text-neutral-400'}`}
-                                                 >
-                                                     {module.selected ? 'Selected' : 'Select'}
-                                                 </button>
-                                            )}
-                                            
-                                            {appMode === 'ARCHITECT' && (
-                                                <button 
-                                                    onClick={(e) => { e.stopPropagation(); removeModule(module.id); }}
-                                                    className="text-neutral-700 hover:text-red-500 transition-colors px-2"
-                                                >
-                                                    <X size={12} />
-                                                </button>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    {/* Module Body */}
-                                    <div className="p-6">
-                                        {(module.type === PluginType.VISUAL_EQ || module.type === PluginType.HYBRID_EQ_DYN || module.type === PluginType.SHINE) && (
-                                            <div className="mb-8">
-                                                <VisualEQ 
-                                                    module={module} 
-                                                    onChangeParam={(p, v) => updateParam(module.id, p, v)}
-                                                    onLayerChange={(layer) => updateModuleState(module.id, { activeLayer: layer })}
-                                                />
-                                            </div>
-                                        )}
-                                        
-                                        {/* Params / Layout Grid */}
-                                        <div className="flex flex-wrap gap-x-10 gap-y-8 items-start">
-                                            {module.layout ? module.layout.map((component, compIndex) => {
-                                                // Layer Visibility Check
-                                                if (component.visibleOnLayer && component.visibleOnLayer !== module.activeLayer) return null;
-
-                                                const isSelected = appMode === 'DESIGNER' && selectedComponentId === component.id;
-                                                const isDragging = draggedComponentId === component.id;
-
-                                                return (
-                                                    <div 
-                                                        key={component.id}
-                                                        draggable={appMode === 'DESIGNER'}
-                                                        onDragStart={(e) => handleComponentDragStart(e, component.id)}
-                                                        onDragOver={(e) => handleComponentDragOver(e, component.id, module.id)}
-                                                        onDragEnd={handleComponentDragEnd}
-                                                        onClick={(e) => {
-                                                            if (appMode === 'DESIGNER') {
-                                                                e.stopPropagation();
-                                                                selectForSidebar(module.id, component.id);
-                                                            }
-                                                        }}
-                                                        className={`relative transition-all ${isSelected ? 'ring-1 ring-purple-500 rounded bg-purple-500/10' : ''} 
-                                                            ${appMode === 'DESIGNER' ? 'hover:bg-white/5 cursor-grab active:cursor-grabbing p-2 -m-2 rounded' : ''}
-                                                            ${isDragging ? 'opacity-30' : ''}
-                                                        `}
-                                                        style={component.type === 'HEADER' || component.type === 'SPACER' ? { width: '100%' } : {}}
-                                                    >
-                                                        {appMode === 'DESIGNER' && (
-                                                            <div className="absolute top-0 right-0 p-1 opacity-0 group-hover:opacity-100 text-neutral-600 pointer-events-none">
-                                                                <Move size={10} />
-                                                            </div>
-                                                        )}
-
-                                                        {component.type === 'KNOB' && component.paramId && (
-                                                            <Knob
-                                                                label={component.label}
-                                                                value={module.params[component.paramId] !== undefined ? module.params[component.paramId] : 0}
-                                                                min={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.min || 0}
-                                                                max={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.max || 100}
-                                                                unit={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.unit}
-                                                                color={component.color}
-                                                                size={component.size || 56}
-                                                                variant={component.style}
-                                                                onChange={(val) => component.paramId && updateParam(module.id, component.paramId, val)}
-                                                            />
-                                                        )}
-
-                                                        {component.type === 'HEADER' && (
-                                                            <div className="flex items-center space-x-2 border-b border-white/5 pb-2 mb-2">
-                                                                <div className="h-1 w-1 bg-current rounded-full" style={{ color: component.color }}></div>
-                                                                <h3 
-                                                                    className="text-xs font-bold uppercase tracking-widest"
-                                                                    style={{ color: component.color }}
-                                                                >
-                                                                    {component.label}
-                                                                </h3>
-                                                            </div>
-                                                        )}
-
-                                                        {component.type === 'SPACER' && (
-                                                            <div style={{ height: component.size || 24 }}></div>
-                                                        )}
-                                                    </div>
-                                                );
-                                            }) : (
-                                                <div className="w-full text-center text-neutral-500 text-xs">Layout Error: No Layout Data</div>
-                                            )}
-                                        </div>
-                                    </div>
-                                </div>
-                            ))}
-                         </div>
-                    </div>
-                )}
-
-                {/* --- ENGINEER VIEW (Code) --- */}
-                {appMode === 'ENGINEER' && (
-                    <div className="max-w-6xl mx-auto h-full pb-20">
-                        {!generatedCode ? (
-                             <div className="flex flex-col items-center justify-center h-full text-neutral-600 select-none">
-                                <Code size={48} className="mb-6 opacity-10" />
-                                <h3 className="text-sm font-bold text-neutral-500 uppercase tracking-widest">Source Not Compiled</h3>
-                                <p className="text-xs mt-2 text-neutral-700">
-                                    Return to Architect mode and click <span className="text-cyan-500">Generate Plugin</span>.
-                                </p>
-                            </div>
-                        ) : (
-                            <div className="grid grid-cols-1 gap-8 animate-in fade-in zoom-in-95 duration-300">
-                                {/* AI Explanation */}
-                                <div className="bg-[#050505] border border-cyan-900/30 p-6 rounded-sm relative overflow-hidden">
-                                    <div className="absolute top-0 left-0 w-1 h-full bg-cyan-500"></div>
-                                    <h3 className="text-cyan-500 font-bold mb-3 flex items-center text-xs uppercase tracking-wider">
-                                        <Zap size={12} className="mr-2" /> System Analysis
-                                    </h3>
-                                    <p className="text-gray-400 text-xs leading-relaxed font-mono">{generatedCode.explanation}</p>
-                                </div>
-
-                                {/* Code Editors */}
-                                <div className="grid grid-cols-2 gap-6 h-[600px]">
-                                    {/* Header File */}
-                                    <div className="bg-[#080808] rounded-sm border border-white/5 flex flex-col overflow-hidden shadow-xl">
-                                        <div className="px-4 py-2 bg-white/[0.02] border-b border-white/5 flex justify-between items-center">
-                                            <span className="text-[10px] font-bold text-neutral-400 font-mono uppercase">PluginProcessor.h</span>
-                                            <div className="flex space-x-1">
-                                                <div className="w-2 h-2 rounded-full bg-red-500/20"></div>
-                                                <div className="w-2 h-2 rounded-full bg-yellow-500/20"></div>
-                                                <div className="w-2 h-2 rounded-full bg-green-500/20"></div>
-                                            </div>
-                                        </div>
-                                        <pre className="flex-1 overflow-auto p-4 text-[10px] leading-5 font-mono text-neutral-400 custom-scrollbar selection:bg-white/10">
-                                            {generatedCode.headerCode}
-                                        </pre>
-                                    </div>
-
-                                    {/* CPP File */}
-                                    <div className="bg-[#080808] rounded-sm border border-white/5 flex flex-col overflow-hidden shadow-xl">
-                                        <div className="px-4 py-2 bg-white/[0.02] border-b border-white/5 flex justify-between items-center">
-                                            <span className="text-[10px] font-bold text-neutral-400 font-mono uppercase">PluginProcessor.cpp</span>
-                                            <div className="flex space-x-1">
-                                                <div className="w-2 h-2 rounded-full bg-red-500/20"></div>
-                                                <div className="w-2 h-2 rounded-full bg-yellow-500/20"></div>
-                                                <div className="w-2 h-2 rounded-full bg-green-500/20"></div>
-                                            </div>
-                                        </div>
-                                        <pre className="flex-1 overflow-auto p-4 text-[10px] leading-5 font-mono text-cyan-100/80 custom-scrollbar selection:bg-cyan-500/20">
-                                            {generatedCode.cppCode}
-                                        </pre>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                )}
-            </div>
-
-            {/* --- TRANSPORT BAR (Bottom) --- */}
-            <Transport 
-                isPlaying={isPlaying}
-                currentTime={currentTime}
-                duration={duration}
-                onPlayPause={togglePlay}
-                onRestart={handleRestart}
-                onSeek={handleSeek}
-            />
-
         </div>
+
+        <Transport isPlaying={isPlaying} currentTime={currentTime} duration={duration} onPlayPause={() => {if(audioRef.current){ if(isPlaying) audioRef.current.pause(); else audioRef.current.play(); }}} onRestart={() => {if(audioRef.current) { audioRef.current.currentTime = 0; audioRef.current.play(); }}} onSeek={(t) => {if(audioRef.current) audioRef.current.currentTime = t;}} />
       </div>
     </div>
   );
