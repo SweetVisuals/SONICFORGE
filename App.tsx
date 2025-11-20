@@ -1,5 +1,3 @@
-
-
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { PluginType, PluginModuleState, GemimiCodeResponse, PluginLayer, VisualizerMode, AudioParamConfig, SaturationMode, ShineMode, UIComponent, UIComponentType, RackVariant, SectionVariant } from './types';
 import { PLUGIN_DEFINITIONS, LAYER_TO_PLUGIN_TYPE, createDefaultLayout } from './constants';
@@ -20,7 +18,7 @@ import {
   Waves, Grid, Sparkles, Tag, Plus, Trash2, LayoutTemplate, ChevronLeft, List, Move,
   Maximize, Columns, Image as ImageIcon, Type, AlignLeft, AlignCenter, AlignRight, MousePointer2,
   CornerDownRight, FolderOpen, ToggleLeft, Sliders, Nut, Circle, Server, AlignJustify, ArrowLeftRight, ArrowUpDown, GripHorizontal, Flame,
-  ChevronDown, Wind, Copy, Users
+  ChevronDown, Wind, Copy, Users, ArrowUpToLine, ArrowDownToLine
 } from 'lucide-react';
 
 const generateId = () => Math.random().toString(36).substring(2, 9);
@@ -365,7 +363,7 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
                 }
                 ctx.actions.setDragOver(null);
             }}
-            className={`relative transition-all duration-200 flex flex-col ${alignClass} ${justifyClass}
+            className={`relative transition-all duration-200 flex flex-col ${alignClass} ${justifyClass} h-full
                 ${isSelected ? 'ring-1 ring-cyan-500/50 bg-cyan-500/5 rounded-sm' : ''} 
                 ${ctx.appMode === 'DESIGNER' ? 'cursor-grab active:cursor-grabbing hover:bg-white/5 rounded-sm' : ''}
                 ${isDragging ? 'opacity-40 scale-95' : ''}
@@ -373,7 +371,7 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
                 ${parentLayout === 'flex' ? 'flex-1 min-w-0' : ''}
             `}
             style={{ 
-                height: component.type === 'VISUALIZER' ? (component.height || 280) : (component.type === 'SPACER' || component.type === 'BRANDING' ? (component.height || 24) : (component.type === 'RACK' ? 'auto' : 'auto')),
+                height: component.type === 'VISUALIZER' ? (component.height || 280) : (component.type === 'SPACER' || component.type === 'BRANDING' ? (component.height || 24) : (component.type === 'RACK' ? 'auto' : undefined)),
             }}
         >
             {ctx.dragOverInfo?.id === component.id && (
@@ -595,7 +593,7 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
 
                     <div 
                         className={`relative flex-1 pointer-events-auto
-                            ${component.layoutDirection === 'row' ? 'flex flex-row items-center space-x-2' : 'grid gap-2'}
+                            ${component.layoutDirection === 'row' ? 'flex flex-row items-stretch space-x-2' : 'grid gap-2'}
                         `}
                         style={component.layoutDirection !== 'row' ? {
                             gridTemplateColumns: `repeat(${component.gridCols || 4}, minmax(0, 1fr))`
@@ -1121,7 +1119,7 @@ export default function App() {
                                         </div>
                                         
                                         {activeComponent.type !== 'RACK' && (
-                                            <div className="grid grid-cols-2 gap-4">
+                                            <div className="space-y-4">
                                                 <div>
                                                     <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Width (Col Span)</label>
                                                     <div className="grid grid-cols-4 gap-1">
@@ -1140,20 +1138,43 @@ export default function App() {
                                                         ))}
                                                     </div>
                                                 </div>
-                                                <div>
-                                                     <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Alignment</label>
-                                                     <div className="flex bg-black border border-white/10 rounded p-0.5">
-                                                        {['start', 'center', 'end', 'stretch'].map((a: any) => (
-                                                            <button 
-                                                                key={a}
-                                                                onClick={() => updateComponent(activeModule.id, activeComponent.id, { align: a })}
-                                                                className={`flex-1 h-6 flex items-center justify-center rounded-sm ${activeComponent.align === a || (!activeComponent.align && a === 'center') ? 'bg-white/20 text-white' : 'text-neutral-600'}`}
-                                                                title={a}
-                                                            >
-                                                                {a === 'start' ? <AlignLeft size={10}/> : a === 'end' ? <AlignRight size={10}/> : a === 'stretch' ? <AlignJustify size={10}/> : <AlignCenter size={10}/>}
-                                                            </button>
-                                                        ))}
-                                                     </div>
+                                                
+                                                <div className="grid grid-cols-2 gap-4">
+                                                    <div>
+                                                         <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Horz Align</label>
+                                                         <div className="flex bg-black border border-white/10 rounded p-0.5">
+                                                            {['start', 'center', 'end', 'stretch'].map((a: any) => (
+                                                                <button 
+                                                                    key={a}
+                                                                    onClick={() => updateComponent(activeModule.id, activeComponent.id, { align: a })}
+                                                                    className={`flex-1 h-6 flex items-center justify-center rounded-sm ${activeComponent.align === a || (!activeComponent.align && a === 'center') ? 'bg-white/20 text-white' : 'text-neutral-600'}`}
+                                                                    title={a}
+                                                                >
+                                                                    {a === 'start' ? <AlignLeft size={10}/> : a === 'end' ? <AlignRight size={10}/> : a === 'stretch' ? <AlignJustify size={10}/> : <AlignCenter size={10}/>}
+                                                                </button>
+                                                            ))}
+                                                         </div>
+                                                    </div>
+                                                    <div>
+                                                         <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Vert Align</label>
+                                                         <div className="flex bg-black border border-white/10 rounded p-0.5">
+                                                            {[
+                                                                { val: 'start', icon: <ArrowUpToLine size={10}/> }, 
+                                                                { val: 'center', icon: <AlignCenter size={10} className="rotate-90"/> },
+                                                                { val: 'end', icon: <ArrowDownToLine size={10}/> }, 
+                                                                { val: 'stretch', icon: <ArrowUpDown size={10}/> }
+                                                            ].map((opt) => (
+                                                                <button 
+                                                                    key={opt.val}
+                                                                    onClick={() => updateComponent(activeModule.id, activeComponent.id, { justify: opt.val as any })}
+                                                                    className={`flex-1 h-6 flex items-center justify-center rounded-sm ${activeComponent.justify === opt.val || (!activeComponent.justify && opt.val === 'center') ? 'bg-white/20 text-white' : 'text-neutral-600'}`}
+                                                                    title={opt.val}
+                                                                >
+                                                                    {opt.icon}
+                                                                </button>
+                                                            ))}
+                                                         </div>
+                                                    </div>
                                                 </div>
                                             </div>
                                         )}
