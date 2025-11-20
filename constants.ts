@@ -1,4 +1,5 @@
 
+
 import { PluginType, AudioParamConfig, PluginLayer, UIComponent } from './types';
 
 // Band Colors matching Fruity PEQ2 / FabFilter style
@@ -30,8 +31,11 @@ const generateEqParams = () => {
         params.push({ id: `b${i}Dyn`, name: `Band ${i} Dyn`, value: 0, min: -18, max: 18, step: 0.1, unit: '', hidden: true });
         // Saturation: Value represents drive intensity
         params.push({ id: `b${i}Sat`, name: `Band ${i} Sat`, value: 0, min: -18, max: 18, step: 0.1, unit: '', hidden: true });
-        // Shine: Value represents polish/excite amount
+        
+        // Shine: Value represents polish/excite amount + Frequency control for separation
         params.push({ id: `b${i}Shine`, name: `Band ${i} Shine`, value: 0, min: -18, max: 18, step: 0.1, unit: '', hidden: true });
+        params.push({ id: `b${i}ShineFreq`, name: `Band ${i} Shine Freq`, value: freqs[i-1], min: 20, max: 20000, step: 1, unit: 'Hz', hidden: true });
+
         // Reverb: Value represents send amount
         params.push({ id: `b${i}Verb`, name: `Band ${i} Verb`, value: 0, min: -18, max: 18, step: 0.1, unit: '', hidden: true });
         // Delay: Value represents feedback/mix
@@ -173,6 +177,33 @@ export const createDefaultLayout = (type: PluginType, defaultColor: string, nest
     }
 
     const knobComponents: UIComponent[] = [];
+
+    // Add Mode Selectors to the Controls section if applicable
+    if (type === PluginType.SATURATION || (isHybrid && nestedModules?.includes(PluginType.SATURATION))) {
+         knobComponents.push({
+             id: Math.random().toString(36).substring(2, 9),
+             type: 'DROPDOWN',
+             label: 'Mode',
+             paramId: 'saturationMode',
+             color: '#f97316',
+             colSpan: 2,
+             visibleOnLayer: isHybrid ? PluginLayer.SATURATION : undefined,
+             style: 'classic'
+         });
+    }
+    
+    if (type === PluginType.SHINE || (isHybrid && nestedModules?.includes(PluginType.SHINE))) {
+         knobComponents.push({
+             id: Math.random().toString(36).substring(2, 9),
+             type: 'DROPDOWN',
+             label: 'Mode',
+             paramId: 'shineMode',
+             color: '#22d3ee',
+             colSpan: 2,
+             visibleOnLayer: isHybrid ? PluginLayer.SHINE : undefined,
+             style: 'classic'
+         });
+    }
 
     params.forEach(p => {
         if (p.hidden) return;

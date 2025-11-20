@@ -19,6 +19,8 @@ export const Slider: React.FC<SliderProps> = ({
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const trackRef = useRef<HTMLDivElement>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
   
   const range = max - min;
   const percentage = Math.min(1, Math.max(0, (value - min) / range));
@@ -61,7 +63,7 @@ export const Slider: React.FC<SliderProps> = ({
       
       pct = Math.min(1, Math.max(0, pct));
       const newValue = min + (pct * (max - min));
-      onChange(newValue);
+      onChangeRef.current(newValue);
   };
 
   const isVertical = orientation === 'vertical';

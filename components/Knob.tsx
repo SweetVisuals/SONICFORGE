@@ -21,6 +21,10 @@ export const Knob: React.FC<KnobProps> = ({
   const knobRef = useRef<HTMLDivElement>(null);
   const startY = useRef(0);
   const startValue = useRef(0);
+  
+  // Use ref for onChange to keep useEffect dependencies stable
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
 
   const clampedValue = Math.min(max, Math.max(min, value));
   const percentage = (clampedValue - min) / (max - min);
@@ -42,7 +46,8 @@ export const Knob: React.FC<KnobProps> = ({
       if (min < 0 && max > 0 && Math.abs(newValue) < range * 0.02) {
           newValue = 0;
       }
-      onChange(newValue);
+      // Use ref to call latest callback without re-binding listeners
+      onChangeRef.current(newValue);
     };
 
     const handleMouseUp = () => {
@@ -60,7 +65,7 @@ export const Knob: React.FC<KnobProps> = ({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isDragging, max, min, onChange]);
+  }, [isDragging, max, min]); // onChange removed from dependency array
 
   const handleMouseDown = (e: React.MouseEvent) => {
     e.stopPropagation();

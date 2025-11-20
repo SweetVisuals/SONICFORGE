@@ -1,5 +1,6 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { PluginType, PluginModuleState, GemimiCodeResponse, PluginLayer, VisualizerMode, AudioParamConfig, SaturationMode, ShineMode, UIComponent, UIComponentType, RackVariant, SectionVariant } from './types';
 import { PLUGIN_DEFINITIONS, LAYER_TO_PLUGIN_TYPE, createDefaultLayout } from './constants';
 import { Knob } from './components/Knob';
@@ -18,7 +19,8 @@ import {
   Cpu, Layers, PenTool, ChevronRight, Box, Terminal, GitMerge,
   Waves, Grid, Sparkles, Tag, Plus, Trash2, LayoutTemplate, ChevronLeft, List, Move,
   Maximize, Columns, Image as ImageIcon, Type, AlignLeft, AlignCenter, AlignRight, MousePointer2,
-  CornerDownRight, FolderOpen, ToggleLeft, Sliders, Nut, Circle, Server, AlignJustify, ArrowLeftRight, ArrowUpDown
+  CornerDownRight, FolderOpen, ToggleLeft, Sliders, Nut, Circle, Server, AlignJustify, ArrowLeftRight, ArrowUpDown, GripHorizontal, Flame,
+  ChevronDown
 } from 'lucide-react';
 
 const generateId = () => Math.random().toString(36).substring(2, 9);
@@ -147,6 +149,15 @@ const insertNode = (nodes: UIComponent[], targetId: string, nodeToInsert: UIComp
     });
 };
 
+// Helper to replace a node directly (used for grouping)
+const replaceNode = (nodes: UIComponent[], targetId: string, newNode: UIComponent): UIComponent[] => {
+    return nodes.map(n => {
+        if (n.id === targetId) return newNode;
+        if (n.children) return { ...n, children: replaceNode(n.children, targetId, newNode) };
+        return n;
+    });
+};
+
 const updateNode = (nodes: UIComponent[], id: string, updates: Partial<UIComponent>): UIComponent[] => {
     return nodes.map(n => {
         if (n.id === id) return { ...n, ...updates };
@@ -157,9 +168,6 @@ const updateNode = (nodes: UIComponent[], id: string, updates: Partial<UICompone
 
 // Visual Drop Zone Component
 const DropZone = ({ position }: { position: DragPosition }) => {
-    const isVertical = position === 'left' || position === 'right';
-    const isHorizontal = position === 'top' || position === 'bottom';
-    
     return (
         <div 
             className={`
@@ -174,6 +182,419 @@ const DropZone = ({ position }: { position: DragPosition }) => {
             {position === 'inside' && (
                 <div className="absolute inset-0 flex items-center justify-center">
                      <CornerDownRight size={24} className="text-cyan-400 drop-shadow-lg" />
+                </div>
+            )}
+        </div>
+    );
+};
+
+// Context interface for cleaner prop passing to external components
+interface DesignerContextProps {
+  appMode: AppMode;
+  selectedComponentId: string | null;
+  draggedComponentId: string | null;
+  dragOverInfo: { id: string, position: DragPosition } | null;
+  actions: {
+    handleDragStart: (e: React.DragEvent, id: string) => void;
+    handleDrop: (e: React.DragEvent, targetId: string, moduleId: string, position: any, index?: number) => void;
+    setDragOver: (info: { id: string, position: DragPosition } | null) => void;
+    setDraggedId: (id: string | null) => void;
+    selectComponent: (moduleId: string, componentId: string) => void;
+    updateParam: (moduleId: string, paramId: string, val: number) => void;
+    updateComponent: (moduleId: string, componentId: string, updates: Partial<UIComponent>) => void;
+    removeComponent: (moduleId: string, componentId: string) => void;
+    updateModule: (moduleId: string, updates: Partial<PluginModuleState>) => void;
+    startRackResize: (e: React.MouseEvent, id: string, height: number) => void;
+  }
+}
+
+// Extracted RenderSidebarTree
+const RenderSidebarTree: React.FC<{ components: UIComponent[], depth?: number, moduleId: string, ctx: DesignerContextProps }> = ({ components, depth = 0, moduleId, ctx }) => {
+    return (
+        <div className="space-y-1">
+            {components.map(comp => (
+                <div key={comp.id}>
+                    <div 
+                        draggable={ctx.appMode === 'DESIGNER'}
+                        onDragStart={(e) => ctx.appMode === 'DESIGNER' && ctx.actions.handleDragStart(e, comp.id)}
+                        onDragOver={(e) => {
+                              e.preventDefault(); 
+                              e.stopPropagation();
+                              if(ctx.draggedComponentId === comp.id) return;
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              const y = e.clientY - rect.top;
+                              const pos = y < rect.height / 2 ? 'top' : 'bottom';
+                              ctx.actions.setDragOver({ id: comp.id, position: pos });
+                        }}
+                        onDrop={(e) => {
+                              if (ctx.appMode === 'DESIGNER') {
+                                   const pos = ctx.dragOverInfo?.id === comp.id ? ctx.dragOverInfo.position : 'bottom'; 
+                                   ctx.actions.handleDrop(e, comp.id, moduleId, pos);
+                              }
+                        }}
+                        onClick={() => ctx.actions.selectComponent(moduleId, comp.id)}
+                        className={`relative flex items-center justify-between px-2 py-1.5 rounded cursor-pointer group transition-colors
+                            ${ctx.selectedComponentId === comp.id ? 'bg-white/10 text-white' : 'text-neutral-500 hover:bg-white/5 hover:text-neutral-300'}
+                            ${ctx.draggedComponentId === comp.id ? 'opacity-40' : ''}
+                        `}
+                        style={{ paddingLeft: `${depth * 12 + 8}px` }}
+                    >
+                        {ctx.dragOverInfo?.id === comp.id && (
+                              <div className={`absolute left-0 right-0 h-0.5 bg-cyan-500 z-50 ${ctx.dragOverInfo.position === 'top' ? 'top-0' : 'bottom-0'}`} />
+                        )}
+                        
+                        <div className="flex items-center space-x-2 overflow-hidden pointer-events-none">
+                              {comp.type === 'SECTION' ? <Columns size={10} /> : 
+                               comp.type === 'RACK' ? <Server size={10} /> :
+                               comp.type === 'KNOB' ? <Activity size={10} /> :
+                               comp.type === 'SLIDER' ? <Sliders size={10} /> :
+                               comp.type === 'SWITCH' ? <ToggleLeft size={10} /> :
+                               comp.type === 'BRANDING' ? <Tag size={10} /> :
+                               comp.type === 'VISUALIZER' ? <Waves size={10} /> :
+                               comp.type === 'DROPDOWN' ? <List size={10} /> :
+                               <Box size={10} />}
+                              <span className="text-[10px] font-medium truncate">{comp.label || comp.type}</span>
+                        </div>
+                        <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                            <GripHorizontal size={10} className="text-neutral-600 mr-1 cursor-grab" />
+                            <button 
+                                onClick={(e) => { e.stopPropagation(); ctx.actions.removeComponent(moduleId, comp.id); }}
+                                className="p-1 hover:text-red-500 transition-colors"
+                            >
+                                <X size={10} />
+                            </button>
+                        </div>
+                    </div>
+                    {comp.children && comp.children.length > 0 && (
+                        <RenderSidebarTree components={comp.children} depth={depth + 1} moduleId={moduleId} ctx={ctx} />
+                    )}
+                </div>
+            ))}
+        </div>
+    );
+};
+
+// Extracted RenderComponent
+const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleState, index: number, parentLayout?: 'grid'|'flex', ctx: DesignerContextProps }> = ({ component, module, index, parentLayout, ctx }) => {
+    if (component.visibleOnLayer && component.visibleOnLayer !== module.activeLayer) return null;
+    
+    const isSelected = ctx.appMode === 'DESIGNER' && ctx.selectedComponentId === component.id;
+    const isDragging = ctx.draggedComponentId === component.id;
+    
+    const span = component.colSpan || 1;
+    let colClass = '';
+    if (parentLayout !== 'flex') {
+        colClass = `col-span-${Math.min(4, Math.max(1, span))}`;
+        if (['KNOB', 'SWITCH', 'SCREW', 'SLIDER'].includes(component.type) && !component.colSpan) colClass = 'col-span-1';
+    }
+    
+    const alignClass = component.align === 'start' ? 'items-start' : component.align === 'end' ? 'items-end' : component.align === 'stretch' ? 'items-stretch' : 'items-center';
+    const justifyClass = component.justify === 'start' ? 'justify-start' : component.justify === 'end' ? 'justify-end' : component.justify === 'between' ? 'justify-between' : 'justify-center';
+
+    return (
+        <div 
+            key={component.id}
+            onClick={(e) => {
+                if (ctx.appMode === 'DESIGNER') {
+                    e.stopPropagation();
+                    ctx.actions.selectComponent(module.id, component.id);
+                }
+            }}
+            draggable={ctx.appMode === 'DESIGNER'}
+            onDragStart={(e) => {
+                 if (ctx.appMode === 'DESIGNER') ctx.actions.handleDragStart(e, component.id);
+            }}
+            onDragEnd={() => {
+                ctx.actions.setDraggedId(null);
+                ctx.actions.setDragOver(null);
+            }}
+            onDragOver={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (ctx.draggedComponentId === component.id) return;
+                
+                const rect = e.currentTarget.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                const w = rect.width;
+                const h = rect.height;
+
+                const edge = Math.min(40, Math.min(w, h) * 0.25); 
+                
+                let pos: DragPosition = 'inside';
+
+                if (y < edge) pos = 'top';
+                else if (y > h - edge) pos = 'bottom';
+                else if (x < edge) pos = 'left';
+                else if (x > w - edge) pos = 'right';
+                else pos = 'inside';
+
+                if (ctx.dragOverInfo?.id !== component.id || ctx.dragOverInfo?.position !== pos) {
+                    ctx.actions.setDragOver({ id: component.id, position: pos });
+                }
+            }}
+            onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (ctx.appMode === 'DESIGNER' && ctx.draggedComponentId && ctx.draggedComponentId !== component.id) {
+                     if (component.type === 'RACK' && ctx.dragOverInfo?.position === 'inside') {
+                          ctx.actions.handleDrop(e, component.id, module.id, 'inside');
+                     } else {
+                         const pos = ctx.dragOverInfo?.id === component.id && ctx.dragOverInfo?.position ? ctx.dragOverInfo.position : 'inside';
+                         ctx.actions.handleDrop(e, component.id, module.id, pos);
+                     }
+                }
+                ctx.actions.setDragOver(null);
+            }}
+            className={`relative transition-all duration-200 flex flex-col ${alignClass} ${justifyClass}
+                ${isSelected ? 'ring-1 ring-cyan-500/50 bg-cyan-500/5 rounded-sm' : ''} 
+                ${ctx.appMode === 'DESIGNER' ? 'cursor-grab active:cursor-grabbing hover:bg-white/5 rounded-sm' : ''}
+                ${isDragging ? 'opacity-40 scale-95' : ''}
+                ${colClass}
+                ${parentLayout === 'flex' ? 'flex-1 min-w-0' : ''}
+            `}
+            style={{ 
+                height: component.type === 'VISUALIZER' ? (component.height || 280) : (component.type === 'SPACER' || component.type === 'BRANDING' ? (component.height || 24) : (component.type === 'RACK' ? 'auto' : 'auto')),
+            }}
+        >
+            {ctx.dragOverInfo?.id === component.id && (
+                <DropZone position={ctx.dragOverInfo.position} />
+            )}
+
+            {component.type === 'KNOB' && component.paramId && (
+                <div className="p-1 pointer-events-none">
+                  <Knob
+                      label={component.label}
+                      value={module.params[component.paramId] !== undefined ? module.params[component.paramId] : 0}
+                      min={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.min || 0}
+                      max={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.max || 100}
+                      unit={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.unit}
+                      color={component.color}
+                      size={component.size || 56}
+                      variant={component.style || 'classic'}
+                      onChange={(val) => component.paramId && ctx.actions.updateParam(module.id, component.paramId, val)}
+                  />
+                </div>
+            )}
+
+            {component.type === 'SLIDER' && component.paramId && (
+                <div className="p-2 h-full flex items-center justify-center w-full pointer-events-none">
+                  <Slider
+                      label={component.label}
+                      value={module.params[component.paramId] !== undefined ? module.params[component.paramId] : 0}
+                      min={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.min || 0}
+                      max={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.max || 100}
+                      unit={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.unit}
+                      color={component.color}
+                      orientation={component.orientation || 'vertical'}
+                      style={component.style || 'classic'}
+                      onChange={(val) => component.paramId && ctx.actions.updateParam(module.id, component.paramId, val)}
+                  />
+                </div>
+            )}
+
+            {component.type === 'SWITCH' && component.paramId && (
+                <div className="p-1 w-full h-full flex items-center justify-center pointer-events-none">
+                  <Switch
+                      label={component.label}
+                      value={module.params[component.paramId] !== undefined ? module.params[component.paramId] : 0}
+                      color={component.color}
+                      style={component.style || 'classic'}
+                      onChange={(val) => component.paramId && ctx.actions.updateParam(module.id, component.paramId, val)}
+                  />
+                </div>
+            )}
+
+            {component.type === 'DROPDOWN' && (
+                <div className="w-full h-full flex flex-col justify-center px-2">
+                    <label className="text-[8px] font-bold uppercase text-neutral-500 mb-1 block">{component.label}</label>
+                    <div className="relative">
+                         <select 
+                            value={
+                                component.paramId === 'saturationMode' ? (module.saturationMode || 'TUBE') :
+                                component.paramId === 'shineMode' ? (module.shineMode || 'AIR') : ''
+                            }
+                            onChange={(e) => {
+                                if (component.paramId === 'saturationMode') ctx.actions.updateModule(module.id, { saturationMode: e.target.value as any });
+                                if (component.paramId === 'shineMode') ctx.actions.updateModule(module.id, { shineMode: e.target.value as any });
+                            }}
+                            className="w-full bg-[#1a1a1a] border border-white/10 rounded p-1.5 text-[10px] font-bold uppercase text-white outline-none focus:border-cyan-500/50 appearance-none cursor-pointer"
+                            style={{ color: component.color }}
+                         >
+                            {component.paramId === 'saturationMode' && (
+                                <>
+                                <option value="TUBE">Tube</option>
+                                <option value="TAPE">Tape</option>
+                                <option value="DIGITAL">Digital</option>
+                                <option value="FUZZ">Fuzz</option>
+                                <option value="RECTIFY">Rectify</option>
+                                </>
+                            )}
+                            {component.paramId === 'shineMode' && (
+                                <>
+                                <option value="AIR">Air</option>
+                                <option value="CRYSTAL">Crystal</option>
+                                <option value="SHIMMER">Shimmer</option>
+                                <option value="GLOSS">Gloss</option>
+                                <option value="ANGELIC">Angelic</option>
+                                </>
+                            )}
+                         </select>
+                         {/* Custom Arrow */}
+                         <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-500">
+                            <ChevronDown size={10} />
+                         </div>
+                    </div>
+                </div>
+            )}
+            
+            {component.type === 'SCREW' && (
+                <div className="p-1 pointer-events-none">
+                    <Screw size={component.size || 14} />
+                </div>
+            )}
+
+            {component.type === 'BRANDING' && (
+                <div 
+                    className={`w-full h-full flex items-center p-2 overflow-hidden rounded-sm border border-transparent
+                        ${component.alignment === 'center' ? 'justify-center text-center' : component.alignment === 'right' ? 'justify-end text-right' : 'justify-start text-left'}
+                    `}
+                    style={{ 
+                        backgroundColor: component.imageUrl ? 'transparent' : (component.color ? `${component.color}10` : 'transparent')
+                    }}
+                >
+                    {component.imageUrl && (
+                        <img src={component.imageUrl} className="absolute inset-0 w-full h-full object-cover opacity-50 pointer-events-none" alt="" />
+                    )}
+                    <div className="relative z-10 pointer-events-none" style={{ color: component.color || '#fff' }}>
+                        <h3 className="font-black uppercase tracking-tighter leading-none" style={{ fontSize: component.fontSize || 18 }}>
+                            {component.label}
+                        </h3>
+                    </div>
+                </div>
+            )}
+
+            {component.type === 'VISUALIZER' && (
+                <div className="w-full h-full pointer-events-auto">
+                    <VisualEQ 
+                        module={module} 
+                        onChangeParam={(p, v) => ctx.actions.updateParam(module.id, p, v)} 
+                        onLayerChange={(layer) => ctx.actions.updateModule(module.id, { activeLayer: layer })} 
+                    />
+                </div>
+            )}
+
+            {component.type === 'RACK' && (
+                <div className="w-full flex flex-col items-center relative">
+                    <Rack 
+                      splits={component.rackSplits || 4} 
+                      label={component.label}
+                      variant={component.rackVariant}
+                      editMode={ctx.appMode === 'DESIGNER'}
+                      itemsCount={component.children ? component.children.length : 0}
+                      height={component.height || 400}
+                    >
+                        {Array.from({ length: component.rackSplits || 4 }).map((_, slotIdx) => {
+                            const child = component.children ? component.children[slotIdx] : undefined;
+                            
+                            return (
+                                <div 
+                                  key={slotIdx} 
+                                  className="relative w-full h-full flex flex-col"
+                                  onDragOver={(e) => {
+                                      if (!child) {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          ctx.actions.setDragOver({ id: `${component.id}-slot-${slotIdx}`, position: 'inside' });
+                                      }
+                                  }}
+                                  onDrop={(e) => {
+                                      if (ctx.appMode === 'DESIGNER' && !child) {
+                                          ctx.actions.handleDrop(e, component.id, module.id, 'at_index', slotIdx);
+                                      }
+                                  }}
+                                >
+                                    {ctx.dragOverInfo?.id === `${component.id}-slot-${slotIdx}` && (
+                                        <div className="absolute inset-0 bg-cyan-500/20 z-20 flex items-center justify-center border-2 border-cyan-500/50 animate-pulse">
+                                            <Plus size={24} className="text-cyan-400" />
+                                        </div>
+                                    )}
+
+                                    {child ? (
+                                        <div className="w-full h-full relative">
+                                          <RenderComponent component={child} module={module} index={slotIdx} ctx={ctx} />
+                                        </div>
+                                    ) : (
+                                        ctx.appMode === 'DESIGNER' && (
+                                            <div className="w-full h-full flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity group/slot">
+                                                <div className="w-4 h-4 border border-dashed border-white/20 rounded-full group-hover/slot:scale-125 transition-transform"></div>
+                                            </div>
+                                        )
+                                    )}
+                                </div>
+                            )
+                        })}
+                    </Rack>
+                    {ctx.appMode === 'DESIGNER' && (
+                        <div 
+                            className="w-full h-3 bg-neutral-800/50 hover:bg-cyan-500/50 cursor-ns-resize flex items-center justify-center border-t border-white/5 mt-0.5 rounded-b"
+                            onMouseDown={(e) => ctx.actions.startRackResize(e, component.id, component.height || 400)}
+                        >
+                            <GripVertical size={10} className="rotate-90 text-white/50" />
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {component.type === 'SECTION' && (
+                <div className={`w-full relative h-full flex flex-col pointer-events-none
+                    ${component.sectionVariant === 'card' ? 'bg-[#121212] border border-white/10 rounded p-3 shadow-lg' : ''}
+                    ${component.sectionVariant === 'solid' ? 'bg-[#0a0a0a] rounded-sm' : ''}
+                    ${component.sectionVariant === 'glass_row' ? 'bg-white/[0.03] border border-white/5 rounded-full px-2' : ''}
+                `}>
+                    {component.sectionVariant !== 'glass_row' && component.sectionVariant !== 'minimal' && (
+                        <div 
+                          className={`flex items-center mb-2 pointer-events-none shrink-0
+                          ${component.sectionVariant === 'solid' ? 'p-2 bg-white/5 text-center justify-center' : ''} 
+                          `}
+                        >
+                          {component.sectionVariant !== 'solid' && component.sectionVariant !== 'card' && (
+                              <div className="h-1 w-1 bg-current rounded-full mr-2" style={{ color: component.color }}></div>
+                          )}
+                          <h3 
+                              className="text-[9px] font-bold uppercase tracking-widest opacity-80"
+                              style={{ color: component.color }}
+                          >
+                              {component.label}
+                          </h3>
+                        </div>
+                    )}
+
+                    <div 
+                        className={`relative flex-1 pointer-events-auto
+                            ${component.layoutDirection === 'row' ? 'flex flex-row items-center space-x-2' : 'grid gap-2'}
+                        `}
+                        style={component.layoutDirection !== 'row' ? {
+                            gridTemplateColumns: `repeat(${component.gridCols || 4}, minmax(0, 1fr))`
+                        } : {}}
+                    >
+                        {component.children && component.children.map((child, i) => (
+                            <RenderComponent key={child.id} component={child} module={module} index={i} parentLayout={component.layoutDirection === 'row' ? 'flex' : 'grid'} ctx={ctx} />
+                        ))}
+                        
+                        {ctx.appMode === 'DESIGNER' && (!component.children || component.children.length === 0) && (
+                            <div className="col-span-full w-full h-full min-h-[32px] border border-dashed border-white/10 rounded flex items-center justify-center text-neutral-700 pointer-events-none">
+                                <span className="text-[8px]">Container</span>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {component.type === 'SPACER' && (
+                <div className={`w-full h-full flex items-center justify-center overflow-hidden min-h-[10px]
+                   ${ctx.appMode === 'DESIGNER' ? 'border border-dashed border-white/5 bg-white/[0.02]' : ''}
+                `}>
                 </div>
             )}
         </div>
@@ -270,7 +691,7 @@ export default function App() {
       else setSelectedComponentId(null);
   };
 
-  const updateParam = (moduleId: string, paramId: string, value: number) => {
+  const updateParam = useCallback((moduleId: string, paramId: string, value: number) => {
     setModules(prev => {
       const next = prev.map(m => {
         if (m.id === moduleId) {
@@ -282,7 +703,7 @@ export default function App() {
       if (updatedModule) audioEngine.updateParams(updatedModule);
       return next;
     });
-  };
+  }, []);
 
   const updateModuleState = (moduleId: string, updates: Partial<PluginModuleState>) => {
       setModules(prev => {
@@ -322,14 +743,9 @@ export default function App() {
 
   const handleComponentDragStart = (e: React.DragEvent, id: string) => {
       e.stopPropagation();
-      // Required for Firefox and some other browsers to initiate drag
       e.dataTransfer.setData('text/plain', id);
       e.dataTransfer.effectAllowed = 'move';
-      
-      // Use setTimeout to prevent browser from cancelling drag if DOM updates too fast
-      setTimeout(() => {
-          setDraggedComponentId(id);
-      }, 0);
+      setTimeout(() => setDraggedComponentId(id), 0);
   };
 
   const handleComponentDrop = (e: React.DragEvent, targetId: string, moduleId: string, position: DragPosition | 'at_index', index?: number) => {
@@ -345,6 +761,32 @@ export default function App() {
       setModules(prev => prev.map(m => {
           if (m.id !== moduleId || !m.layout) return m;
 
+          const targetNode = findComponent(m.layout, targetId);
+          const isTargetContainer = targetNode && (targetNode.type === 'SECTION' || targetNode.type === 'RACK');
+          
+          // 1. If dropping 'inside' a leaf node (e.g., Knob, Slider), GROUP them.
+          if (position === 'inside' && !isTargetContainer && targetNode) {
+               const { node, newNodes } = removeNode(m.layout, draggedComponentId);
+               if (!node) return m;
+
+               // Create Group wrapping both
+               const newGroup: UIComponent = {
+                   id: generateId(),
+                   type: 'SECTION',
+                   label: 'Group',
+                   children: [targetNode, node],
+                   colSpan: targetNode.colSpan || 1,
+                   sectionVariant: 'minimal',
+                   layoutDirection: 'row', // Default to side-by-side stacking
+                   gridCols: 4
+               };
+               
+               // Replace targetNode with newGroup in tree
+               // We need to use the newNodes tree (where 'node' is already removed)
+               const finalLayout = replaceNode(newNodes, targetId, newGroup);
+               return { ...m, layout: finalLayout };
+          }
+
           const parent = findParent(m.layout, targetId);
           const parentIsRack = parent?.type === 'RACK';
           
@@ -356,7 +798,6 @@ export default function App() {
                const swapNodes = (list: UIComponent[]): UIComponent[] => {
                    return list.map(n => {
                        if (n.id === targetId) {
-                           // If target is already a row-group, insert into it
                            if (n.type === 'SECTION' && n.layoutDirection === 'row') {
                                return { 
                                    ...n, 
@@ -365,7 +806,6 @@ export default function App() {
                                        : [...(n.children || []), node]
                                };
                            }
-                           // Otherwise, wrap target and node in a new row-group
                            return {
                                id: generateId(),
                                type: 'SECTION',
@@ -383,12 +823,11 @@ export default function App() {
                return { ...m, layout: swapNodes(newNodes) };
           }
 
-          // Map DragPosition to insertNode position
           let insertPos: 'before' | 'after' | 'inside' | 'at_index' = 'inside';
           if (position === 'at_index') insertPos = 'at_index';
           else if (position === 'left' || position === 'top') insertPos = 'before';
           else if (position === 'right' || position === 'bottom') insertPos = 'after';
-          else insertPos = 'inside'; // fallback
+          else insertPos = 'inside'; 
 
           const finalNodes = insertNode(newNodes, targetId, node, insertPos, index);
           return { ...m, layout: finalNodes };
@@ -448,12 +887,31 @@ export default function App() {
       };
 
       selectedModules.forEach(m => {
-          hybrid.params = { ...hybrid.params, ...m.params };
+          if (m.type === PluginType.SHINE) {
+               // Map Shine Gain to Hybrid Shine Param to avoid EQ collision
+               Object.keys(m.params).forEach(key => {
+                   const match = key.match(/^b(\d+)Gain$/);
+                   if (match) {
+                       const band = match[1];
+                       hybrid.params[`b${band}Shine`] = m.params[key];
+                   }
+                   // Also Map Frequency params so Shine curve shape is preserved
+                   const matchFreq = key.match(/^b(\d+)Freq$/);
+                   if (matchFreq) {
+                       const band = matchFreq[1];
+                       hybrid.params[`b${band}ShineFreq`] = m.params[key];
+                   }
+               });
+               hybrid.shineMode = m.shineMode || 'AIR';
+          } else {
+               hybrid.params = { ...hybrid.params, ...m.params };
+               if (m.type === PluginType.SATURATION) {
+                   hybrid.saturationMode = m.saturationMode || 'TUBE';
+               }
+          }
+
           if (m.nestedModules) hybrid.nestedModules?.push(...m.nestedModules);
           else hybrid.nestedModules?.push(m.type);
-          
-          if (m.type === PluginType.SATURATION) hybrid.saturationMode = m.saturationMode;
-          if (m.type === PluginType.SHINE) hybrid.shineMode = m.shineMode;
       });
       
       hybrid.nestedModules = [...new Set(hybrid.nestedModules)];
@@ -492,345 +950,29 @@ export default function App() {
   const activeModule = modules.find(m => m.id === selectedModuleId);
   const activeComponent = activeModule?.layout ? findComponent(activeModule.layout, selectedComponentId || '') : null;
   
-  const RenderSidebarTree = ({ components, depth = 0 }: { components: UIComponent[], depth?: number }) => {
-      return (
-          <div className="space-y-1">
-              {components.map(comp => (
-                  <div key={comp.id}>
-                      <div 
-                          onClick={() => selectForSidebar(activeModule!.id, comp.id)}
-                          className={`flex items-center justify-between px-2 py-1.5 rounded cursor-pointer group transition-colors
-                              ${selectedComponentId === comp.id ? 'bg-white/10 text-white' : 'text-neutral-500 hover:bg-white/5 hover:text-neutral-300'}
-                          `}
-                          style={{ paddingLeft: `${depth * 12 + 8}px` }}
-                      >
-                          <div className="flex items-center space-x-2 overflow-hidden">
-                                {comp.type === 'SECTION' ? <Columns size={10} /> : 
-                                 comp.type === 'RACK' ? <Server size={10} /> :
-                                 comp.type === 'KNOB' ? <Activity size={10} /> :
-                                 comp.type === 'SLIDER' ? <Sliders size={10} /> :
-                                 comp.type === 'SWITCH' ? <ToggleLeft size={10} /> :
-                                 comp.type === 'BRANDING' ? <Tag size={10} /> :
-                                 comp.type === 'VISUALIZER' ? <Waves size={10} /> :
-                                 <Box size={10} />}
-                                <span className="text-[10px] font-medium truncate">{comp.label || comp.type}</span>
-                          </div>
-                          <button 
-                              onClick={(e) => { e.stopPropagation(); removeComponent(activeModule!.id, comp.id); }}
-                              className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-500 transition-opacity"
-                          >
-                              <X size={10} />
-                          </button>
-                      </div>
-                      {comp.children && comp.children.length > 0 && (
-                          <RenderSidebarTree components={comp.children} depth={depth + 1} />
-                      )}
-                  </div>
-              ))}
-          </div>
-      );
-  };
-
-  const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleState, index: number, parentLayout?: 'grid'|'flex' }> = ({ component, module, index, parentLayout }) => {
-      if (component.visibleOnLayer && component.visibleOnLayer !== module.activeLayer) return null;
-      
-      const isSelected = appMode === 'DESIGNER' && selectedComponentId === component.id;
-      const isDragging = draggedComponentId === component.id;
-      
-      const span = component.colSpan || 1;
-      let colClass = '';
-      if (parentLayout !== 'flex') {
-          colClass = `col-span-${Math.min(4, Math.max(1, span))}`;
-          if (['KNOB', 'SWITCH', 'SCREW', 'SLIDER'].includes(component.type) && !component.colSpan) colClass = 'col-span-1';
-      }
-      
-      const alignClass = component.align === 'start' ? 'items-start' : component.align === 'end' ? 'items-end' : component.align === 'stretch' ? 'items-stretch' : 'items-center';
-      const justifyClass = component.justify === 'start' ? 'justify-start' : component.justify === 'end' ? 'justify-end' : component.justify === 'between' ? 'justify-between' : 'justify-center';
-
-      return (
-          <div 
-              key={component.id}
-              onClick={(e) => {
-                  if (appMode === 'DESIGNER') {
-                      e.stopPropagation();
-                      selectForSidebar(module.id, component.id);
-                  }
-              }}
-              draggable={appMode === 'DESIGNER'}
-              onDragStart={(e) => {
-                   if (appMode === 'DESIGNER') handleComponentDragStart(e, component.id);
-              }}
-              onDragEnd={() => {
-                  setDraggedComponentId(null);
-                  setDragOverInfo(null);
-              }}
-              onDragOver={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  if (draggedComponentId === component.id) return;
-                  
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const x = e.clientX - rect.left;
-                  const y = e.clientY - rect.top;
-                  const w = rect.width;
-                  const h = rect.height;
-
-                  // Define regions with larger drop zones for easier targeting
-                  const edge = Math.min(40, Math.min(w, h) * 0.25); // Increased max edge to 40px
-                  const isContainer = component.type === 'SECTION' || component.type === 'RACK';
-                  
-                  let pos: DragPosition = 'inside';
-
-                  // Priority Logic
-                  // Improved edge detection for containers
-                  if (y < edge) pos = 'top';
-                  else if (y > h - edge) pos = 'bottom';
-                  else if (x < edge) pos = 'left';
-                  else if (x > w - edge) pos = 'right';
-                  else pos = 'inside';
-
-                  if (dragOverInfo?.id !== component.id || dragOverInfo?.position !== pos) {
-                      setDragOverInfo({ id: component.id, position: pos });
-                  }
-              }}
-              onDrop={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  if (appMode === 'DESIGNER' && draggedComponentId && draggedComponentId !== component.id) {
-                       if (component.type === 'RACK' && dragOverInfo?.position === 'inside') {
-                            // Dragging INTO a rack (on the container itself), default to appending or last slot
-                            handleComponentDrop(e, component.id, module.id, 'inside');
-                       } else {
-                           const pos = dragOverInfo?.id === component.id && dragOverInfo?.position ? dragOverInfo.position : 'inside';
-                           handleComponentDrop(e, component.id, module.id, pos);
-                       }
-                  }
-                  setDragOverInfo(null);
-              }}
-              className={`relative transition-all duration-200 flex flex-col ${alignClass} ${justifyClass}
-                  ${isSelected ? 'ring-1 ring-cyan-500/50 bg-cyan-500/5 rounded-sm' : ''} 
-                  ${appMode === 'DESIGNER' ? 'cursor-grab active:cursor-grabbing hover:bg-white/5 rounded-sm' : ''}
-                  ${isDragging ? 'opacity-40 scale-95' : ''}
-                  ${colClass}
-                  ${parentLayout === 'flex' ? 'flex-1 min-w-0' : ''}
-              `}
-              style={{ 
-                  height: component.type === 'VISUALIZER' ? (component.height || 280) : (component.type === 'SPACER' || component.type === 'BRANDING' ? (component.height || 24) : (component.type === 'RACK' ? 'auto' : 'auto')),
-              }}
-          >
-              {/* Overlay DropZone */}
-              {dragOverInfo?.id === component.id && (
-                  <DropZone position={dragOverInfo.position} />
-              )}
-
-              {/* --- RENDER TYPES --- */}
-              
-              {component.type === 'KNOB' && component.paramId && (
-                  <div className="p-1 pointer-events-none">
-                    <Knob
-                        label={component.label}
-                        value={module.params[component.paramId] !== undefined ? module.params[component.paramId] : 0}
-                        min={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.min || 0}
-                        max={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.max || 100}
-                        unit={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.unit}
-                        color={component.color}
-                        size={component.size || 56}
-                        variant={component.style || 'classic'}
-                        onChange={(val) => component.paramId && updateParam(module.id, component.paramId, val)}
-                    />
-                  </div>
-              )}
-
-              {component.type === 'SLIDER' && component.paramId && (
-                  <div className="p-2 h-full flex items-center justify-center w-full pointer-events-none">
-                    <Slider
-                        label={component.label}
-                        value={module.params[component.paramId] !== undefined ? module.params[component.paramId] : 0}
-                        min={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.min || 0}
-                        max={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.max || 100}
-                        unit={PLUGIN_DEFINITIONS[module.type].params.find(p => p.id === component.paramId)?.unit}
-                        color={component.color}
-                        orientation={component.orientation || 'vertical'}
-                        style={component.style || 'classic'}
-                        onChange={(val) => component.paramId && updateParam(module.id, component.paramId, val)}
-                    />
-                  </div>
-              )}
-
-              {component.type === 'SWITCH' && component.paramId && (
-                  <div className="p-1 w-full h-full flex items-center justify-center pointer-events-none">
-                    <Switch
-                        label={component.label}
-                        value={module.params[component.paramId] !== undefined ? module.params[component.paramId] : 0}
-                        color={component.color}
-                        style={component.style || 'classic'}
-                        onChange={(val) => component.paramId && updateParam(module.id, component.paramId, val)}
-                    />
-                  </div>
-              )}
-              
-              {component.type === 'SCREW' && (
-                  <div className="p-1 pointer-events-none">
-                      <Screw size={component.size || 14} />
-                  </div>
-              )}
-
-              {component.type === 'BRANDING' && (
-                  <div 
-                      className={`w-full h-full flex items-center p-2 overflow-hidden rounded-sm border border-transparent
-                          ${component.alignment === 'center' ? 'justify-center text-center' : component.alignment === 'right' ? 'justify-end text-right' : 'justify-start text-left'}
-                      `}
-                      style={{ 
-                          backgroundColor: component.imageUrl ? 'transparent' : (component.color ? `${component.color}10` : 'transparent')
-                      }}
-                  >
-                      {component.imageUrl && (
-                          <img src={component.imageUrl} className="absolute inset-0 w-full h-full object-cover opacity-50 pointer-events-none" alt="" />
-                      )}
-                      <div className="relative z-10 pointer-events-none" style={{ color: component.color || '#fff' }}>
-                          <h3 className="font-black uppercase tracking-tighter leading-none" style={{ fontSize: component.fontSize || 18 }}>
-                              {component.label}
-                          </h3>
-                      </div>
-                  </div>
-              )}
-
-              {component.type === 'VISUALIZER' && (
-                  <div className="w-full h-full pointer-events-auto">
-                      <VisualEQ 
-                          module={module} 
-                          onChangeParam={(p, v) => updateParam(module.id, p, v)} 
-                          onLayerChange={(layer) => updateModuleState(module.id, { activeLayer: layer })} 
-                      />
-                  </div>
-              )}
-
-              {component.type === 'RACK' && (
-                  <div className="w-full flex flex-col items-center relative">
-                      <Rack 
-                        splits={component.rackSplits || 4} 
-                        label={component.label}
-                        variant={component.rackVariant}
-                        editMode={appMode === 'DESIGNER'}
-                        itemsCount={component.children ? component.children.length : 0}
-                        height={component.height || 400}
-                      >
-                          {Array.from({ length: component.rackSplits || 4 }).map((_, slotIdx) => {
-                              const child = component.children ? component.children[slotIdx] : undefined;
-                              
-                              return (
-                                  <div 
-                                    key={slotIdx} 
-                                    className="relative w-full h-full flex flex-col"
-                                    onDragOver={(e) => {
-                                        // Allow dragging into empty slot
-                                        if (!child) {
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            setDragOverInfo({ id: `${component.id}-slot-${slotIdx}`, position: 'inside' });
-                                        }
-                                    }}
-                                    onDrop={(e) => {
-                                        if (appMode === 'DESIGNER' && !child) {
-                                            handleComponentDrop(e, component.id, module.id, 'at_index', slotIdx);
-                                        }
-                                    }}
-                                  >
-                                      {dragOverInfo?.id === `${component.id}-slot-${slotIdx}` && (
-                                          <div className="absolute inset-0 bg-cyan-500/20 z-20 flex items-center justify-center border-2 border-cyan-500/50 animate-pulse">
-                                              <Plus size={24} className="text-cyan-400" />
-                                          </div>
-                                      )}
-
-                                      {child ? (
-                                          <div className="w-full h-full relative">
-                                            <RenderComponent component={child} module={module} index={slotIdx} />
-                                          </div>
-                                      ) : (
-                                          appMode === 'DESIGNER' && (
-                                              <div className="w-full h-full flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity group/slot">
-                                                  <div className="w-4 h-4 border border-dashed border-white/20 rounded-full group-hover/slot:scale-125 transition-transform"></div>
-                                              </div>
-                                          )
-                                      )}
-                                  </div>
-                              )
-                          })}
-                      </Rack>
-                      {/* Resizer Handle */}
-                      {appMode === 'DESIGNER' && (
-                          <div 
-                              className="w-full h-3 bg-neutral-800/50 hover:bg-cyan-500/50 cursor-ns-resize flex items-center justify-center border-t border-white/5 mt-0.5 rounded-b"
-                              onMouseDown={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  setResizingRackId(component.id);
-                                  resizingStartY.current = e.clientY;
-                                  resizingStartHeight.current = component.height || 400;
-                              }}
-                          >
-                              <GripVertical size={10} className="rotate-90 text-white/50" />
-                          </div>
-                      )}
-                  </div>
-              )}
-
-              {component.type === 'SECTION' && (
-                  <div className={`w-full relative h-full flex flex-col pointer-events-none
-                      ${component.sectionVariant === 'card' ? 'bg-[#121212] border border-white/10 rounded p-3 shadow-lg' : ''}
-                      ${component.sectionVariant === 'solid' ? 'bg-[#0a0a0a] rounded-sm' : ''}
-                      ${component.sectionVariant === 'glass_row' ? 'bg-white/[0.03] border border-white/5 rounded-full px-2' : ''}
-                  `}>
-                      {/* Section Header */}
-                      {component.sectionVariant !== 'glass_row' && component.sectionVariant !== 'minimal' && (
-                          <div 
-                            className={`flex items-center mb-2 pointer-events-none shrink-0
-                            ${component.sectionVariant === 'solid' ? 'p-2 bg-white/5 text-center justify-center' : ''} 
-                            `}
-                          >
-                            {component.sectionVariant !== 'solid' && component.sectionVariant !== 'card' && (
-                                <div className="h-1 w-1 bg-current rounded-full mr-2" style={{ color: component.color }}></div>
-                            )}
-                            <h3 
-                                className="text-[9px] font-bold uppercase tracking-widest opacity-80"
-                                style={{ color: component.color }}
-                            >
-                                {component.label}
-                            </h3>
-                          </div>
-                      )}
-
-                      {/* Nested Layout Container */}
-                      <div 
-                          className={`relative flex-1 pointer-events-auto
-                              ${component.layoutDirection === 'row' ? 'flex flex-row items-center space-x-2' : 'grid gap-2'}
-                          `}
-                          style={component.layoutDirection !== 'row' ? {
-                              gridTemplateColumns: `repeat(${component.gridCols || 4}, minmax(0, 1fr))`
-                          } : {}}
-                      >
-                          {component.children && component.children.map((child, i) => (
-                              <RenderComponent key={child.id} component={child} module={module} index={i} parentLayout={component.layoutDirection === 'row' ? 'flex' : 'grid'} />
-                          ))}
-                          
-                          {/* Empty State for Section */}
-                          {appMode === 'DESIGNER' && (!component.children || component.children.length === 0) && (
-                              <div className="col-span-full w-full h-full min-h-[32px] border border-dashed border-white/10 rounded flex items-center justify-center text-neutral-700 pointer-events-none">
-                                  <span className="text-[8px]">Container</span>
-                              </div>
-                          )}
-                      </div>
-                  </div>
-              )}
-
-              {component.type === 'SPACER' && (
-                  <div className={`w-full h-full flex items-center justify-center overflow-hidden min-h-[10px]
-                     ${appMode === 'DESIGNER' ? 'border border-dashed border-white/5 bg-white/[0.02]' : ''}
-                  `}>
-                  </div>
-              )}
-          </div>
-      );
+  // Designer Context
+  const designerContext: DesignerContextProps = {
+    appMode,
+    selectedComponentId,
+    draggedComponentId,
+    dragOverInfo,
+    actions: {
+        handleDragStart: handleComponentDragStart,
+        handleDrop: handleComponentDrop,
+        setDragOver: setDragOverInfo,
+        setDraggedId: setDraggedComponentId,
+        selectComponent: selectForSidebar,
+        updateParam,
+        updateComponent,
+        removeComponent,
+        updateModule: updateModuleState,
+        startRackResize: (e, id, h) => {
+            e.preventDefault(); e.stopPropagation();
+            setResizingRackId(id);
+            resizingStartY.current = e.clientY;
+            resizingStartHeight.current = h;
+        }
+    }
   };
 
   return (
@@ -851,7 +993,6 @@ export default function App() {
           <div className="flex-1 overflow-y-auto p-6 custom-scrollbar space-y-8">
             {appMode === 'ARCHITECT' && (
                 <>
-                    {/* Module Identity */}
                     <div className="space-y-3">
                         <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block">Module Identity</label>
                         <div className="relative group">
@@ -879,6 +1020,19 @@ export default function App() {
                             ))}
                         </div>
                     </div>
+
+                    {selectedModuleId && activeModule && (
+                        <div className="pt-6 border-t border-white/5 mt-6 animate-in fade-in slide-in-from-left-4">
+                             <div className="flex items-center space-x-2 text-white mb-4">
+                                <Sliders size={14} className="text-cyan-500" />
+                                <span className="text-xs font-bold uppercase">{activeModule.title} Settings</span>
+                            </div>
+                            {/* Controls are now inside the module layout via DROPDOWNs */}
+                            <p className="text-[10px] text-neutral-500">
+                                Global module settings (like Modes) are now available directly on the module controls panel.
+                            </p>
+                        </div>
+                    )}
                 </>
             )}
 
@@ -912,7 +1066,6 @@ export default function App() {
                                             />
                                         </div>
                                         
-                                        {/* Width & Align Control */}
                                         {activeComponent.type !== 'RACK' && (
                                             <div className="grid grid-cols-2 gap-4">
                                                 <div>
@@ -951,7 +1104,6 @@ export default function App() {
                                             </div>
                                         )}
 
-                                        {/* Section Controls */}
                                         {activeComponent.type === 'SECTION' && (
                                             <>
                                                 <div>
@@ -1002,7 +1154,6 @@ export default function App() {
                                             </>
                                         )}
 
-                                        {/* Rack Specific */}
                                         {activeComponent.type === 'RACK' && (
                                             <>
                                                 <div>
@@ -1027,7 +1178,7 @@ export default function App() {
                                                                 key={n}
                                                                 onClick={() => updateComponent(activeModule.id, activeComponent.id, { rackSplits: n })}
                                                                 className={`w-8 h-8 border rounded text-xs font-bold flex items-center justify-center
-                                                                    ${(activeComponent.rackSplits || 4) === n ? 'bg-white text-black' : 'bg-black border-white/10 text-neutral-500'}
+                                                                    {(activeComponent.rackSplits || 4) === n ? 'bg-white text-black' : 'bg-black border-white/10 text-neutral-500'}
                                                                 `}
                                                             >
                                                                 {n}
@@ -1047,9 +1198,9 @@ export default function App() {
                                             </>
                                         )}
 
-                                        {/* Component Type Specific Controls */}
-                                        {(activeComponent.type === 'KNOB' || activeComponent.type === 'SLIDER' || activeComponent.type === 'SWITCH' || activeComponent.type === 'SCREW') && (
+                                        {(activeComponent.type === 'KNOB' || activeComponent.type === 'SLIDER' || activeComponent.type === 'SWITCH' || activeComponent.type === 'SCREW' || activeComponent.type === 'DROPDOWN') && (
                                             <>
+                                                {(activeComponent.type !== 'DROPDOWN') && (
                                                 <div>
                                                     <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Parameter Link</label>
                                                     <select 
@@ -1062,8 +1213,8 @@ export default function App() {
                                                         ))}
                                                     </select>
                                                 </div>
+                                                )}
                                                 
-                                                {/* Size Control */}
                                                 {(activeComponent.type === 'KNOB' || activeComponent.type === 'SCREW') && (
                                                     <div>
                                                         <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Size (px)</label>
@@ -1077,6 +1228,7 @@ export default function App() {
                                                 )}
 
                                                 <div className="grid grid-cols-2 gap-4">
+                                                    {(activeComponent.type !== 'DROPDOWN') && (
                                                     <div>
                                                         <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Style</label>
                                                         <select 
@@ -1092,6 +1244,7 @@ export default function App() {
                                                             <option value="analog">Analog (Real)</option>
                                                         </select>
                                                     </div>
+                                                    )}
                                                     <ColorPicker 
                                                         label="Accent Color"
                                                         value={activeComponent.color || '#3b82f6'}
@@ -1099,7 +1252,6 @@ export default function App() {
                                                     />
                                                 </div>
                                                 
-                                                {/* Slider Specific */}
                                                 {activeComponent.type === 'SLIDER' && (
                                                     <div>
                                                         <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Orientation</label>
@@ -1125,8 +1277,10 @@ export default function App() {
                                 </div>
                             ) : (
                                 <>
-                                    {/* --- OVERVIEW / ADD MODE --- */}
+                                    {/* --- MODULE SETTINGS & LAYOUT --- */}
                                     <div className="space-y-6 animate-in slide-in-from-left-4">
+                                        {/* REMOVED SIDEBAR MODULE SETTINGS (NOW IN MODULE UI) */}
+
                                         <div className="space-y-2">
                                             <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block">Add Elements</label>
                                             <div className="grid grid-cols-3 gap-2">
@@ -1226,15 +1380,14 @@ export default function App() {
                                             </div>
                                         </div>
                                         
-                                        {/* --- STRUCTURE TREE --- */}
                                         <div className="space-y-2 border-t border-white/5 pt-4">
                                             <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block flex items-center justify-between">
                                                 <span>Structure</span>
-                                                <span className="text-[9px] text-neutral-700">Layers</span>
+                                                <span className="text-[9px] text-neutral-700">Drag to Reorder</span>
                                             </label>
                                             <div className="bg-[#080808] border border-white/5 rounded p-2 max-h-64 overflow-y-auto custom-scrollbar">
                                                 {activeModule.layout && activeModule.layout.length > 0 ? (
-                                                    <RenderSidebarTree components={activeModule.layout} />
+                                                    <RenderSidebarTree components={activeModule.layout} moduleId={activeModule.id} ctx={designerContext} />
                                                 ) : (
                                                     <div className="text-[9px] text-neutral-600 p-2 text-center">Empty Layout</div>
                                                 )}
@@ -1253,7 +1406,6 @@ export default function App() {
             )}
           </div>
 
-          {/* Footer */}
           <div className="p-6 border-t border-white/5 bg-[#050505]">
               <button 
                   onClick={handleGenerateCode}
@@ -1269,7 +1421,6 @@ export default function App() {
       {/* --- MAIN CONTENT --- */}
       <div className="flex-1 flex flex-col min-w-0 bg-[#020202] relative">
         <div className="h-16 border-b border-white/5 flex items-center justify-between px-6 bg-[#050505] shrink-0 z-20">
-             {/* Audio & Transport */}
              <div className="flex items-center space-x-4">
                  <div className="relative group">
                     <input type="file" accept="audio/*" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"/>
@@ -1288,7 +1439,6 @@ export default function App() {
              <div className="w-24"></div>
         </div>
 
-        {/* Top Merge Bar */}
         {appMode === 'ARCHITECT' && selectedModules.length > 0 && (
             <div className="fixed top-24 left-1/2 -translate-x-1/2 bg-[#09090b] border border-white/10 px-6 py-3 rounded-full shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex items-center space-x-6 z-50 animate-in slide-in-from-top-4 fade-in border-t border-white/20 backdrop-blur-xl">
                  <span className="text-xs font-bold text-white flex items-center">
@@ -1321,14 +1471,12 @@ export default function App() {
              {(appMode === 'ARCHITECT' || appMode === 'DESIGNER') && modules.length > 0 && (
                  <div className="max-w-6xl mx-auto space-y-8 pb-32">
                      
-                     {/* Visualizer */}
                      <div className={`transition-all duration-700 ease-[cubic-bezier(0.25,1,0.5,1)] overflow-hidden ${isPlaying ? 'max-h-[300px] opacity-100 mb-8 translate-y-0' : 'max-h-0 opacity-0 mb-0 -translate-y-4'}`}>
                          <div className="bg-[#050505] rounded border border-white/5 shadow-2xl p-4 relative">
                              <Visualizer mode={visualizerMode} />
                          </div>
                      </div>
 
-                     {/* Modules */}
                      <div className="space-y-4">
                         {modules.map((module) => (
                             <div 
@@ -1357,7 +1505,7 @@ export default function App() {
                                 <div className="p-6">
                                     <div className="grid grid-cols-4 gap-4 items-start">
                                         {module.layout ? module.layout.map((comp, i) => (
-                                            <RenderComponent key={comp.id} component={comp} module={module} index={i} />
+                                            <RenderComponent key={comp.id} component={comp} module={module} index={i} ctx={designerContext} />
                                         )) : (
                                             <div className="col-span-4 text-center text-neutral-600 text-xs">No layout defined</div>
                                         )}

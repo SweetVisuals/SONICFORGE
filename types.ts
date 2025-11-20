@@ -36,7 +36,7 @@ export interface AudioParamConfig {
   hidden?: boolean; // For params controlled solely via graph
 }
 
-export type UIComponentType = 'KNOB' | 'SLIDER' | 'SWITCH' | 'SECTION' | 'SPACER' | 'BRANDING' | 'SCREW' | 'RACK' | 'VISUALIZER';
+export type UIComponentType = 'KNOB' | 'SLIDER' | 'SWITCH' | 'SECTION' | 'SPACER' | 'BRANDING' | 'SCREW' | 'RACK' | 'VISUALIZER' | 'DROPDOWN';
 
 export type SectionVariant = 'simple' | 'card' | 'solid' | 'minimal' | 'glass_row';
 export type RackVariant = 'basic' | 'industrial' | 'metal' | 'framed' | 'cyber';
