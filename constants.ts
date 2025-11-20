@@ -1,4 +1,5 @@
 
+
 import { PluginType, AudioParamConfig, PluginLayer, UIComponent } from './types';
 
 // Band Colors matching Fruity PEQ2 / FabFilter style
@@ -188,7 +189,9 @@ export const LAYER_TO_PLUGIN_TYPE: Record<PluginLayer, PluginType[]> = {
     [PluginLayer.SATURATION]: [PluginType.SATURATION],
     [PluginLayer.SHINE]: [PluginType.SHINE],
     [PluginLayer.REVERB]: [PluginType.REVERB],
-    [PluginLayer.DELAY]: [PluginType.DELAY]
+    [PluginLayer.DELAY]: [PluginType.DELAY],
+    [PluginLayer.IMAGER]: [PluginType.STEREO_IMAGER],
+    [PluginLayer.MODULATION]: [PluginType.CHORUS, PluginType.DOUBLER, PluginType.FLANGER]
 };
 
 export const createDefaultLayout = (type: PluginType, defaultColor: string, nestedModules?: PluginType[]): UIComponent[] => {
@@ -208,178 +211,9 @@ export const createDefaultLayout = (type: PluginType, defaultColor: string, nest
         fontSize: 18,
         height: 40
     });
-
-    // Special Layout for Stereo Imager (Professional Layout)
-    if (type === PluginType.STEREO_IMAGER) {
-        // Top Visualizer - Full Width
-        layout.push({
-            id: Math.random().toString(36).substring(2, 9),
-            type: 'SECTION',
-            label: 'Goniometer',
-            colSpan: 4,
-            sectionVariant: 'solid',
-            children: [{
-                id: Math.random().toString(36).substring(2, 9),
-                type: 'VISUALIZER',
-                label: 'Vectorscope',
-                visualizerMode: 'VECTORSCOPE',
-                height: 300,
-                colSpan: 4
-            }]
-        });
-
-        // Main Control Deck
-        layout.push({
-             id: Math.random().toString(36).substring(2, 9),
-             type: 'SECTION',
-             label: 'Parameters',
-             colSpan: 4,
-             sectionVariant: 'card',
-             gridCols: 4,
-             children: [
-                 // Left Col: Width Control (Vertical Slider style)
-                 {
-                     id: Math.random().toString(36).substring(2, 9),
-                     type: 'SECTION',
-                     label: 'Stereo',
-                     colSpan: 1,
-                     sectionVariant: 'minimal',
-                     gridCols: 1, // Force 1 column for vertical stack
-                     children: [
-                        {
-                             id: Math.random().toString(36).substring(2, 9),
-                             type: 'SLIDER',
-                             label: 'Width',
-                             paramId: 'width',
-                             orientation: 'vertical',
-                             height: 200,
-                             color: '#8b5cf6',
-                             style: 'cyber',
-                             colSpan: 1
-                        }
-                     ]
-                 },
-                 // Middle Col: Fine Tuning (Rotations & Asymmetry)
-                 {
-                     id: Math.random().toString(36).substring(2, 9),
-                     type: 'SECTION',
-                     label: 'Focus',
-                     colSpan: 2,
-                     sectionVariant: 'minimal',
-                     gridCols: 2, // Split into 2 internal columns for layout
-                     children: [
-                         // Left internal col: Knob
-                         {
-                             id: Math.random().toString(36).substring(2, 9),
-                             type: 'SECTION',
-                             label: 'Filter',
-                             colSpan: 1,
-                             gridCols: 1,
-                             sectionVariant: 'minimal',
-                             children: [
-                                 {
-                                     id: Math.random().toString(36).substring(2, 9),
-                                     type: 'KNOB',
-                                     label: 'Bass Mono',
-                                     paramId: 'bassMono',
-                                     size: 60,
-                                     color: '#f472b6',
-                                     style: 'tech',
-                                     colSpan: 1
-                                 }
-                             ]
-                         },
-                         // Right internal col: Sliders
-                         {
-                             id: Math.random().toString(36).substring(2, 9),
-                             type: 'SECTION',
-                             label: 'Geometry',
-                             colSpan: 1,
-                             gridCols: 1,
-                             sectionVariant: 'minimal',
-                             children: [
-                                 {
-                                     id: Math.random().toString(36).substring(2, 9),
-                                     type: 'SLIDER',
-                                     label: 'Asymmetry',
-                                     paramId: 'asymmetry',
-                                     orientation: 'horizontal',
-                                     style: 'analog',
-                                     color: '#ffffff',
-                                     colSpan: 1
-                                 },
-                                 {
-                                     id: Math.random().toString(36).substring(2, 9),
-                                     type: 'SLIDER',
-                                     label: 'Rotation',
-                                     paramId: 'rotation',
-                                     orientation: 'horizontal',
-                                     style: 'analog',
-                                     color: '#ffffff',
-                                     colSpan: 1
-                                 }
-                             ]
-                         }
-                     ]
-                 },
-                 // Right Col: Output & Effect
-                 {
-                     id: Math.random().toString(36).substring(2, 9),
-                     type: 'SECTION',
-                     label: 'Output',
-                     colSpan: 1,
-                     sectionVariant: 'minimal',
-                     gridCols: 1, // Force 1 column for vertical stack
-                     children: [
-                        {
-                             id: Math.random().toString(36).substring(2, 9),
-                             type: 'SECTION',
-                             label: 'FX',
-                             colSpan: 1,
-                             layoutDirection: 'row',
-                             sectionVariant: 'minimal',
-                             children: [
-                                {
-                                     id: Math.random().toString(36).substring(2, 9),
-                                     type: 'KNOB',
-                                     label: 'Stereoize',
-                                     paramId: 'stereoize',
-                                     size: 40,
-                                     color: '#22d3ee',
-                                     style: 'ring',
-                                     colSpan: 1
-                                },
-                                {
-                                     id: Math.random().toString(36).substring(2, 9),
-                                     type: 'KNOB',
-                                     label: 'Pan',
-                                     paramId: 'pan',
-                                     size: 40,
-                                     color: '#94a3b8',
-                                     style: 'classic',
-                                     colSpan: 1
-                                }
-                             ]
-                        },
-                        {
-                             id: Math.random().toString(36).substring(2, 9),
-                             type: 'SLIDER',
-                             label: 'Gain',
-                             paramId: 'output',
-                             orientation: 'vertical',
-                             height: 100,
-                             color: '#ffffff',
-                             style: 'classic',
-                             colSpan: 1
-                        }
-                     ]
-                 }
-             ]
-        });
-        return layout;
-    }
-
-    // 2. Add Visualizer for supported types
+    
+    // 2. Add Visualizer
+    // For Hybrid, we might want to support switching visualization modes, but VisualEQ handles that internally based on active layer now
     if (type === PluginType.VISUAL_EQ || type === PluginType.HYBRID_EQ_DYN || type === PluginType.SHINE) {
         layout.push({
             id: Math.random().toString(36).substring(2, 9),
@@ -390,9 +224,10 @@ export const createDefaultLayout = (type: PluginType, defaultColor: string, nest
         });
     }
 
+    // Controls Section construction
     const knobComponents: UIComponent[] = [];
 
-    // Add Mode Selectors to the Controls section if applicable
+    // Add Mode Selectors
     if (type === PluginType.SATURATION || (isHybrid && nestedModules?.includes(PluginType.SATURATION))) {
          knobComponents.push({
              id: Math.random().toString(36).substring(2, 9),
@@ -419,6 +254,7 @@ export const createDefaultLayout = (type: PluginType, defaultColor: string, nest
          });
     }
 
+    // 3a. Process Standard Hybrid Params (EQ, Strip)
     params.forEach(p => {
         if (p.hidden) return;
         
@@ -455,16 +291,92 @@ export const createDefaultLayout = (type: PluginType, defaultColor: string, nest
         });
     });
 
-    // 3. Wrap Knobs in a Section
+    // 3b. Process Extra Nested Modules (Imager, Doubler, etc.) into the SAME Control section
+    if (isHybrid && nestedModules) {
+        nestedModules.forEach(subType => {
+            // Skip standard layers handled above
+            if ([PluginType.VISUAL_EQ, PluginType.COMPRESSOR, PluginType.MULTIBAND, PluginType.SATURATION, PluginType.SHINE, PluginType.REVERB, PluginType.DELAY].includes(subType)) return;
+            
+            const subParams = PLUGIN_DEFINITIONS[subType].params;
+            let targetLayer = PluginLayer.EQ;
+            
+            if (subType === PluginType.STEREO_IMAGER) targetLayer = PluginLayer.IMAGER;
+            else if ([PluginType.CHORUS, PluginType.DOUBLER, PluginType.FLANGER].includes(subType)) targetLayer = PluginLayer.MODULATION;
+
+            subParams.forEach(p => {
+                 // Skip output param of nested modules to avoid duplicate masters
+                 if (p.id === 'output') return; 
+
+                 let type: any = 'KNOB';
+                 if (p.id === 'width' || p.id === 'asymmetry' || p.id === 'rotation') type = 'SLIDER';
+                 if (p.id === 'stereoize' || p.id === 'bassMono') type = 'KNOB';
+                 
+                 knobComponents.push({
+                     id: Math.random().toString(36).substring(2, 9),
+                     type,
+                     label: p.name,
+                     paramId: p.id,
+                     color: PLUGIN_DEFINITIONS[subType].defaultColor,
+                     size: type === 'KNOB' ? 56 : undefined,
+                     colSpan: type === 'SLIDER' ? 1 : 1,
+                     orientation: 'vertical',
+                     style: subType === PluginType.STEREO_IMAGER ? 'cyber' : 'classic',
+                     visibleOnLayer: targetLayer
+                 });
+            });
+        });
+    }
+
+    // 4. Wrap Knobs in a single Section
     layout.push({
         id: Math.random().toString(36).substring(2, 9),
         type: 'SECTION',
         label: 'Controls',
         children: knobComponents,
         colSpan: 4,
-        sectionVariant: 'card', // Default to card
+        sectionVariant: 'card',
         color: '#ffffff'
     });
+
+    // Special layout for Standalone Imager (If explicitly requested as main type)
+    if (type === PluginType.STEREO_IMAGER) {
+         return [
+            {
+                id: Math.random().toString(36).substring(2, 9),
+                type: 'BRANDING',
+                label: type,
+                color: defaultColor,
+                colSpan: 4,
+                alignment: 'left',
+                fontSize: 18,
+                height: 40
+            },
+            {
+                id: Math.random().toString(36).substring(2, 9),
+                type: 'SECTION',
+                label: 'Goniometer',
+                colSpan: 4,
+                sectionVariant: 'solid',
+                children: [{
+                    id: Math.random().toString(36).substring(2, 9),
+                    type: 'VISUALIZER',
+                    label: 'Vectorscope',
+                    visualizerMode: 'VECTORSCOPE',
+                    height: 300,
+                    colSpan: 4
+                }]
+            },
+            {
+                 id: Math.random().toString(36).substring(2, 9),
+                 type: 'SECTION',
+                 label: 'Parameters',
+                 colSpan: 4,
+                 sectionVariant: 'card',
+                 gridCols: 4,
+                 children: knobComponents // Reuse generated knobs or define custom
+            }
+         ];
+    }
 
     return layout;
 };

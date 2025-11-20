@@ -1,5 +1,4 @@
 
-
 import { PluginModuleState, PluginType, SaturationMode, ShineMode } from '../types';
 
 class AudioEngine {
@@ -156,21 +155,21 @@ class AudioEngine {
 
       if (nodes.length > 0 && previousNode) {
         // For standard linear chains:
-        if (module.type === PluginType.STEREO_IMAGER) {
-             // Input -> Splitter (Node 0)
-             // Output -> OutputGain (Last Node)
+        if (module.type === PluginType.STEREO_IMAGER || module.type === PluginType.HYBRID_EQ_DYN) {
+             // Complex modules manage their own internal connection.
+             // Input is nodes[0], Output is nodes[last].
+             // Simply bridge Previous -> Input.
              const inputNode = nodes[0];
              const outputNode = nodes[nodes.length - 1];
              previousNode.connect(inputNode);
              previousNode = outputNode;
         } else if (module.type === PluginType.CHORUS || module.type === PluginType.FLANGER || module.type === PluginType.DOUBLER) {
-            // Input must split to dry and wet paths
-            // Node 0 is InputGain/Splitter
+            // Complex Routing handled in createNodes
             previousNode.connect(nodes[0]);
             previousNode = nodes[nodes.length - 1]; // Output Mix
         } else {
             previousNode.connect(nodes[0]);
-            // Connect internal nodes
+            // Connect internal nodes linearly
             for (let i = 0; i < nodes.length - 1; i++) {
               nodes[i].connect(nodes[i+1]);
             }
@@ -270,17 +269,57 @@ class AudioEngine {
             nodes.push(convolver);
         }
         
-        // 4. Output Gain
+        // 4. Output Gain (for the Strip)
         const gain = this.context.createGain();
         gain.gain.value = Math.pow(10, v('output', 0) / 20);
         nodes.push(gain);
 
-        // Connect linear chain
+        // Connect standard strip nodes linearly
         for (let i = 0; i < nodes.length - 1; i++) {
             nodes[i].connect(nodes[i+1]);
         }
-        
-        return [nodes[0], ...nodes.slice(1)];
+
+        // 5. Handle Hybrid Extra Modules (Imager, Doubler, etc)
+        if (isHybrid && nestedModules) {
+             let lastNode = nodes[nodes.length - 1];
+
+             if (nestedModules.includes(PluginType.STEREO_IMAGER)) {
+                 const imagerNodes = this.createImagerNodes(params);
+                 imagerNodes.forEach(n => (n as any)._hybridType = 'IMAGER'); // Mark for updates
+                 
+                 // Append: lastNode -> imagerInput
+                 lastNode.connect(imagerNodes[0]);
+                 
+                 // Push nodes to main array for cleanup
+                 nodes.push(...imagerNodes);
+                 // Update lastNode to imager output
+                 lastNode = imagerNodes[imagerNodes.length - 1];
+             }
+
+             if (nestedModules.includes(PluginType.DOUBLER)) {
+                 const doublerNodes = this.createDoublerNodes(params);
+                 doublerNodes.forEach(n => (n as any)._hybridType = 'DOUBLER');
+                 
+                 lastNode.connect(doublerNodes[0]);
+                 nodes.push(...doublerNodes);
+                 lastNode = doublerNodes[doublerNodes.length - 1];
+             }
+
+             if (nestedModules.includes(PluginType.CHORUS)) {
+                 const chorusNodes = this.createChorusNodes(params);
+                 chorusNodes.forEach(n => (n as any)._hybridType = 'CHORUS');
+
+                 lastNode.connect(chorusNodes[0]);
+                 nodes.push(...chorusNodes);
+                 lastNode = chorusNodes[chorusNodes.length - 1];
+             }
+             
+             // Ensure the array returned has the true input at [0] and true output at [last]
+             // nodes[0] is the first filter, which is correct.
+             // lastNode is now the output of the full hybrid chain.
+        }
+
+        return nodes;
       }
       
       case PluginType.MULTIBAND: {
@@ -339,267 +378,256 @@ class AudioEngine {
       }
 
       case PluginType.STEREO_IMAGER: {
-          // Complex M/S Imager Graph with Rotation and Asymmetry
-          
-          // INPUT
-          const inputNode = this.context.createGain();
-          const splitter = this.context.createChannelSplitter(2);
-          inputNode.connect(splitter);
-
-          // 1. ENCODE (L/R -> M/S)
-          // Mid = 0.5 * (L + R)
-          // Side = 0.5 * (L - R)
-          
-          const midEncode = this.context.createGain(); midEncode.gain.value = 0.5;
-          const sideEncode = this.context.createGain(); sideEncode.gain.value = 0.5;
-          const sideInvert = this.context.createGain(); sideInvert.gain.value = -1;
-          
-          splitter.connect(midEncode, 0); // L -> Mid
-          splitter.connect(midEncode, 1); // R -> Mid
-          
-          splitter.connect(sideEncode, 0); // L -> Side
-          splitter.connect(sideInvert, 1); // R -> Invert -> Side
-          sideInvert.connect(sideEncode);
-
-          // 2. ROTATION & ASYMMETRY (Matrix on M/S)
-          // Rotation mixes M into S and S into M
-          // Asymmetry mixes M into S (skew)
-          
-          // Nodes for Rotation Matrix
-          const midToMid = this.context.createGain();
-          const midToSide = this.context.createGain();
-          const sideToMid = this.context.createGain();
-          const sideToSide = this.context.createGain();
-          
-          // Connect Encode to Matrix
-          midEncode.connect(midToMid);
-          midEncode.connect(midToSide);
-          sideEncode.connect(sideToMid);
-          sideEncode.connect(sideToSide);
-          
-          // Matrix Summation Points
-          const midSum = this.context.createGain();
-          const sideSum = this.context.createGain();
-          
-          midToMid.connect(midSum);
-          sideToMid.connect(midSum);
-          
-          midToSide.connect(sideSum);
-          sideToSide.connect(sideSum);
-
-          // 3. PROCESSING ON SIDE CHANNEL
-          
-          // Bass Mono (HPF on Side)
-          const sideHpf = this.context.createBiquadFilter();
-          sideHpf.type = 'highpass';
-          sideHpf.frequency.value = v('bassMono', 100);
-          
-          sideSum.connect(sideHpf);
-          
-          // Stereoize (Delay based Haas effect)
-          const stereoDelay = this.context.createDelay(0.1);
-          stereoDelay.delayTime.value = 0.008;
-          const stereoHp = this.context.createBiquadFilter();
-          stereoHp.type = 'highpass';
-          stereoHp.frequency.value = 200;
-          const stereoGain = this.context.createGain();
-          
-          // Inject Mid into Side for Stereoize (creates fake side content)
-          midSum.connect(stereoDelay);
-          stereoDelay.connect(stereoHp);
-          stereoHp.connect(stereoGain);
-          
-          // Combine processed Side + Stereoize
-          const sideFinalMix = this.context.createGain();
-          sideHpf.connect(sideFinalMix);
-          stereoGain.connect(sideFinalMix);
-          
-          // Width Control (Gain on Final Side)
-          const widthGain = this.context.createGain();
-          sideFinalMix.connect(widthGain);
-
-          // 4. DECODE (M/S -> L/R)
-          // L = M + S
-          // R = M - S
-          const outL = this.context.createGain();
-          const outR = this.context.createGain();
-          
-          midSum.connect(outL);
-          midSum.connect(outR);
-          
-          widthGain.connect(outL); // + Side
-          const sideOutInvert = this.context.createGain();
-          sideOutInvert.gain.value = -1;
-          widthGain.connect(sideOutInvert);
-          sideOutInvert.connect(outR); // - Side
-
-          // 5. OUTPUT STAGE (Pan & Gain)
-          const merger = this.context.createChannelMerger(2);
-          outL.connect(merger, 0, 0);
-          outR.connect(merger, 0, 1);
-          
-          const panner = this.context.createStereoPanner();
-          const outGain = this.context.createGain();
-          
-          merger.connect(panner);
-          panner.connect(outGain);
-
-          // Store nodes for updates
-          // [0] Input
-          // [1] sideHpf (Bass Mono)
-          // [2] widthGain (Width)
-          // [3] stereoGain (Stereoize Amt)
-          // [4] panner (Pan)
-          // [5] outGain (Output)
-          // [6-9] Matrix Gains: midToMid, midToSide, sideToMid, sideToSide (Rotation/Asymmetry)
-          // [10] Output Node
-          
-          return [inputNode, sideHpf, widthGain, stereoGain, panner, outGain, midToMid, midToSide, sideToMid, sideToSide, outGain];
+          return this.createImagerNodes(params);
       }
 
       case PluginType.CHORUS: {
-          const dry = this.context.createGain();
-          const wet = this.context.createGain();
-          const inputNode = this.context.createGain(); // Split point
-          
-          const delay = this.context.createDelay(1.0);
-          delay.delayTime.value = 0.03;
-          
-          const osc = this.context.createOscillator();
-          osc.type = 'sine';
-          osc.frequency.value = v('rate', 1.5);
-          
-          const oscGain = this.context.createGain();
-          oscGain.gain.value = v('depth', 0.002);
-          
-          osc.connect(oscGain);
-          oscGain.connect(delay.delayTime);
-          osc.start();
-          
-          // Routing
-          inputNode.connect(dry);
-          inputNode.connect(delay);
-          delay.connect(wet);
-          
-          const output = this.context.createGain();
-          dry.connect(output);
-          wet.connect(output);
-          
-          const mix = v('mix', 0.5);
-          dry.gain.value = 1 - mix;
-          wet.gain.value = mix;
-
-          return [inputNode, delay, osc, oscGain, dry, wet, output];
+          return this.createChorusNodes(params);
       }
 
       case PluginType.FLANGER: {
-          const dry = this.context.createGain();
-          const wet = this.context.createGain();
-          const inputNode = this.context.createGain();
-          
-          const delay = this.context.createDelay(1.0);
-          delay.delayTime.value = 0.005; // Shorter delay for flanger
-          
-          const feedback = this.context.createGain();
-          feedback.gain.value = v('feedback', 0.5);
-          
-          const osc = this.context.createOscillator();
-          osc.type = 'triangle';
-          osc.frequency.value = v('rate', 0.5);
-          
-          const oscGain = this.context.createGain();
-          oscGain.gain.value = v('depth', 0.002);
-          
-          osc.connect(oscGain);
-          oscGain.connect(delay.delayTime);
-          osc.start();
-          
-          // Routing
-          inputNode.connect(dry);
-          inputNode.connect(delay);
-          delay.connect(wet);
-          
-          // Feedback Loop
-          delay.connect(feedback);
-          feedback.connect(delay);
-          
-          const output = this.context.createGain();
-          dry.connect(output);
-          wet.connect(output);
-          
-          const mix = v('mix', 0.5);
-          dry.gain.value = 1 - mix;
-          wet.gain.value = mix;
-
-          return [inputNode, delay, osc, oscGain, feedback, dry, wet, output];
+          return this.createFlangerNodes(params);
       }
 
       case PluginType.DOUBLER: {
-          const inputNode = this.context.createGain();
-          const output = this.context.createGain();
-          const dry = this.context.createGain();
-          
-          // Split for Stereo widening
-          const merger = this.context.createChannelMerger(2);
-
-          // Left Delay Path
-          const delayL = this.context.createDelay(1.0);
-          delayL.delayTime.value = v('spread', 0.02);
-          const oscL = this.context.createOscillator();
-          oscL.frequency.value = 0.1; // Slow drift
-          const oscLGain = this.context.createGain();
-          oscLGain.gain.value = v('detune', 0.001); // Subtle detune
-          oscL.connect(oscLGain);
-          oscLGain.connect(delayL.delayTime);
-          oscL.start();
-          
-          // Right Delay Path
-          const delayR = this.context.createDelay(1.0);
-          delayR.delayTime.value = v('spread', 0.02) * 1.5;
-          const oscR = this.context.createOscillator();
-          oscR.frequency.value = 0.13; // Different rate
-          const oscRGain = this.context.createGain();
-          oscRGain.gain.value = v('detune', 0.001);
-          oscR.connect(oscRGain);
-          oscRGain.connect(delayR.delayTime);
-          oscR.start();
-          
-          const wetL = this.context.createGain();
-          const wetR = this.context.createGain();
-          
-          inputNode.connect(delayL);
-          inputNode.connect(delayR);
-          inputNode.connect(dry);
-          
-          delayL.connect(wetL);
-          delayR.connect(wetR);
-          
-          // Connect to stereo channels
-          // Dry Center
-          dry.connect(merger, 0, 0);
-          dry.connect(merger, 0, 1);
-          
-          // Wets Hard Panned
-          wetL.connect(merger, 0, 0);
-          wetR.connect(merger, 0, 1);
-          
-          merger.connect(output);
-          
-          const mix = v('mix', 0.5);
-          dry.gain.value = 1 - mix;
-          wetL.gain.value = mix;
-          wetR.gain.value = mix;
-          
-          // Return array order important for updateParams?
-          // Doubler: [input, delayL, delayR, oscL, oscR, oscLGain, oscRGain, wetL, wetR, dry, output]
-          return [inputNode, delayL, delayR, oscL, oscR, oscLGain, oscRGain, wetL, wetR, dry, output];
+          return this.createDoublerNodes(params);
       }
 
       default:
         return [];
     }
   }
+
+  // --- Node Creation Helpers for Reuse ---
   
+  private createImagerNodes(params: any): AudioNode[] {
+      const v = (key: string, def: number) => (typeof params[key] === 'number' ? params[key] : def);
+
+      const inputNode = this.context.createGain();
+      const splitter = this.context.createChannelSplitter(2);
+      inputNode.connect(splitter);
+
+      // M/S Encoding
+      const midEncode = this.context.createGain(); midEncode.gain.value = 0.5;
+      const sideEncode = this.context.createGain(); sideEncode.gain.value = 0.5;
+      const sideInvert = this.context.createGain(); sideInvert.gain.value = -1;
+      
+      splitter.connect(midEncode, 0);
+      splitter.connect(midEncode, 1);
+      
+      splitter.connect(sideEncode, 0);
+      splitter.connect(sideInvert, 1);
+      sideInvert.connect(sideEncode);
+
+      // Matrix
+      const midToMid = this.context.createGain();
+      const midToSide = this.context.createGain();
+      const sideToMid = this.context.createGain();
+      const sideToSide = this.context.createGain();
+      
+      midEncode.connect(midToMid);
+      midEncode.connect(midToSide);
+      sideEncode.connect(sideToMid);
+      sideEncode.connect(sideToSide);
+      
+      const midSum = this.context.createGain();
+      const sideSum = this.context.createGain();
+      
+      midToMid.connect(midSum);
+      sideToMid.connect(midSum);
+      midToSide.connect(sideSum);
+      sideToSide.connect(sideSum);
+
+      // Processing
+      const sideHpf = this.context.createBiquadFilter();
+      sideHpf.type = 'highpass';
+      sideHpf.frequency.value = v('bassMono', 100);
+      
+      sideSum.connect(sideHpf);
+      
+      const stereoDelay = this.context.createDelay(0.1);
+      stereoDelay.delayTime.value = 0.008;
+      const stereoHp = this.context.createBiquadFilter();
+      stereoHp.type = 'highpass';
+      stereoHp.frequency.value = 200;
+      const stereoGain = this.context.createGain();
+      
+      midSum.connect(stereoDelay);
+      stereoDelay.connect(stereoHp);
+      stereoHp.connect(stereoGain);
+      
+      const sideFinalMix = this.context.createGain();
+      sideHpf.connect(sideFinalMix);
+      stereoGain.connect(sideFinalMix);
+      
+      const widthGain = this.context.createGain();
+      widthGain.gain.value = v('width', 100) / 100;
+      sideFinalMix.connect(widthGain);
+
+      // Decoding
+      const outL = this.context.createGain();
+      const outR = this.context.createGain();
+      
+      midSum.connect(outL);
+      midSum.connect(outR);
+      
+      widthGain.connect(outL);
+      const sideOutInvert = this.context.createGain();
+      sideOutInvert.gain.value = -1;
+      widthGain.connect(sideOutInvert);
+      sideOutInvert.connect(outR);
+
+      // Output
+      const merger = this.context.createChannelMerger(2);
+      outL.connect(merger, 0, 0);
+      outR.connect(merger, 0, 1);
+      
+      const panner = this.context.createStereoPanner();
+      panner.pan.value = v('pan', 0) / 100;
+
+      const outGain = this.context.createGain();
+      
+      merger.connect(panner);
+      panner.connect(outGain);
+
+      return [inputNode, sideHpf, widthGain, stereoGain, panner, outGain, midToMid, midToSide, sideToMid, sideToSide, outGain];
+  }
+
+  private createDoublerNodes(params: any): AudioNode[] {
+      const v = (key: string, def: number) => (typeof params[key] === 'number' ? params[key] : def);
+      
+      const inputNode = this.context.createGain();
+      const output = this.context.createGain();
+      const dry = this.context.createGain();
+      const merger = this.context.createChannelMerger(2);
+
+      const delayL = this.context.createDelay(1.0);
+      delayL.delayTime.value = v('spread', 20) / 1000;
+      
+      const oscL = this.context.createOscillator();
+      oscL.frequency.value = 0.1;
+      const oscLGain = this.context.createGain();
+      oscLGain.gain.value = v('detune', 10) / 10000;
+      oscL.connect(oscLGain);
+      oscLGain.connect(delayL.delayTime);
+      oscL.start();
+      
+      const delayR = this.context.createDelay(1.0);
+      delayR.delayTime.value = (v('spread', 20) / 1000) * 1.5;
+      
+      const oscR = this.context.createOscillator();
+      oscR.frequency.value = 0.13;
+      const oscRGain = this.context.createGain();
+      oscRGain.gain.value = v('detune', 10) / 10000;
+      oscR.connect(oscRGain);
+      oscRGain.connect(delayR.delayTime);
+      oscR.start();
+      
+      const wetL = this.context.createGain();
+      const wetR = this.context.createGain();
+      
+      inputNode.connect(delayL);
+      inputNode.connect(delayR);
+      inputNode.connect(dry);
+      
+      delayL.connect(wetL);
+      delayR.connect(wetR);
+      
+      dry.connect(merger, 0, 0);
+      dry.connect(merger, 0, 1);
+      wetL.connect(merger, 0, 0);
+      wetR.connect(merger, 0, 1);
+      
+      merger.connect(output);
+
+      const mix = v('mix', 0.5);
+      dry.gain.value = 1 - mix;
+      wetL.gain.value = mix;
+      wetR.gain.value = mix;
+      
+      return [inputNode, delayL, delayR, oscL, oscR, oscLGain, oscRGain, wetL, wetR, dry, output];
+  }
+  
+  private createChorusNodes(params: any): AudioNode[] {
+      const v = (key: string, def: number) => (typeof params[key] === 'number' ? params[key] : def);
+      
+      const dry = this.context.createGain();
+      const wet = this.context.createGain();
+      const inputNode = this.context.createGain(); 
+      
+      const delay = this.context.createDelay(1.0);
+      delay.delayTime.value = 0.03;
+      
+      const osc = this.context.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = v('rate', 1.5);
+      
+      const oscGain = this.context.createGain();
+      oscGain.gain.value = v('depth', 0.002);
+      
+      osc.connect(oscGain);
+      oscGain.connect(delay.delayTime);
+      osc.start();
+      
+      inputNode.connect(dry);
+      inputNode.connect(delay);
+      delay.connect(wet);
+      
+      const output = this.context.createGain();
+      dry.connect(output);
+      wet.connect(output);
+      
+      const mix = v('mix', 0.5);
+      dry.gain.value = 1 - mix;
+      wet.gain.value = mix;
+
+      return [inputNode, delay, osc, oscGain, dry, wet, output];
+  }
+
+  private createFlangerNodes(params: any): AudioNode[] {
+      const v = (key: string, def: number) => (typeof params[key] === 'number' ? params[key] : def);
+
+      const dry = this.context.createGain();
+      const wet = this.context.createGain();
+      const inputNode = this.context.createGain();
+      
+      const delay = this.context.createDelay(1.0);
+      delay.delayTime.value = 0.005;
+      
+      const feedback = this.context.createGain();
+      feedback.gain.value = v('feedback', 0.5);
+      
+      const osc = this.context.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.value = v('rate', 0.5);
+      
+      const oscGain = this.context.createGain();
+      oscGain.gain.value = v('depth', 0.002);
+      
+      osc.connect(oscGain);
+      oscGain.connect(delay.delayTime);
+      osc.start();
+      
+      inputNode.connect(dry);
+      inputNode.connect(delay);
+      delay.connect(wet);
+      
+      delay.connect(feedback);
+      feedback.connect(delay);
+      
+      const output = this.context.createGain();
+      dry.connect(output);
+      wet.connect(output);
+      
+      const mix = v('mix', 0.5);
+      dry.gain.value = 1 - mix;
+      wet.gain.value = mix;
+
+      return [inputNode, delay, osc, oscGain, feedback, dry, wet, output];
+  }
+  
+  // ---
+
   updateParams(module: PluginModuleState) {
      const nodes = this.pluginNodes.get(module.id);
      if (!nodes) return;
@@ -607,8 +635,74 @@ class AudioEngine {
      const p = module.params;
      const t = this.context.currentTime;
 
-     // Helper to safe guard params against NaN or Undefined
      const v = (val: any, def: number) => (typeof val === 'number' && Number.isFinite(val) ? val : def);
+
+     // Update logic helpers
+     const updateImager = (imagerNodes: AudioNode[], params: any) => {
+         const sideHpf = imagerNodes[1] as BiquadFilterNode;
+         const widthGain = imagerNodes[2] as GainNode;
+         const stereoGain = imagerNodes[3] as GainNode;
+         const panner = imagerNodes[4] as StereoPannerNode;
+         
+         const midToMid = imagerNodes[6] as GainNode;
+         const midToSide = imagerNodes[7] as GainNode;
+         const sideToMid = imagerNodes[8] as GainNode;
+         const sideToSide = imagerNodes[9] as GainNode;
+
+         widthGain.gain.setTargetAtTime(v(params.width, 100) / 100, t, 0.1);
+         sideHpf.frequency.setTargetAtTime(v(params.bassMono, 100), t, 0.1);
+         stereoGain.gain.setTargetAtTime(v(params.stereoize, 0) / 100, t, 0.1);
+         panner.pan.setTargetAtTime(v(params.pan, 0) / 100, t, 0.1);
+
+         const deg = v(params.rotation, 0);
+         const rad = (deg * Math.PI) / 180;
+         const asym = v(params.asymmetry, 0) / 100;
+
+         const cos = Math.cos(rad);
+         const sin = Math.sin(rad);
+         
+         midToMid.gain.setTargetAtTime(cos, t, 0.1);
+         sideToMid.gain.setTargetAtTime(-sin, t, 0.1);
+         midToSide.gain.setTargetAtTime(sin + (asym * 0.5), t, 0.1); 
+         sideToSide.gain.setTargetAtTime(cos, t, 0.1);
+     };
+
+     const updateDoubler = (dNodes: AudioNode[], params: any) => {
+        const delayL = dNodes[1] as DelayNode;
+        const delayR = dNodes[2] as DelayNode;
+        const oscLGain = dNodes[5] as GainNode;
+        const oscRGain = dNodes[6] as GainNode;
+        const wetL = dNodes[7] as GainNode;
+        const wetR = dNodes[8] as GainNode;
+        const dry = dNodes[9] as GainNode;
+
+        const spread = v(params.spread, 20) / 1000;
+        delayL.delayTime.setTargetAtTime(spread, t, 0.1);
+        delayR.delayTime.setTargetAtTime(spread * 1.5, t, 0.1);
+        
+        const detuneAmt = v(params.detune, 10) / 10000;
+        oscLGain.gain.setTargetAtTime(detuneAmt, t, 0.1);
+        oscRGain.gain.setTargetAtTime(detuneAmt, t, 0.1);
+        
+        const mix = v(params.mix, 0.5);
+        dry.gain.setTargetAtTime(1 - mix, t, 0.1);
+        wetL.gain.setTargetAtTime(mix, t, 0.1);
+        wetR.gain.setTargetAtTime(mix, t, 0.1);
+     };
+
+     const updateChorus = (cNodes: AudioNode[], params: any) => {
+         const osc = cNodes[2] as OscillatorNode;
+         const oscGain = cNodes[3] as GainNode;
+         const dry = cNodes[4] as GainNode;
+         const wet = cNodes[5] as GainNode;
+
+         osc.frequency.setTargetAtTime(v(params.rate, 1.5), t, 0.1);
+         oscGain.gain.setTargetAtTime(v(params.depth, 0.002), t, 0.1);
+         
+         const mix = v(params.mix, 0.5);
+         dry.gain.setTargetAtTime(1 - mix, t, 0.1);
+         wet.gain.setTargetAtTime(mix, t, 0.1);
+     };
 
      if (module.type === PluginType.VISUAL_EQ || module.type === PluginType.HYBRID_EQ_DYN || module.type === PluginType.SHINE) {
         // Apply filter params (First 7 nodes are filters)
@@ -631,45 +725,32 @@ class AudioEngine {
 
         // Hybrid Logic
         if (module.type === PluginType.HYBRID_EQ_DYN) {
-            // Smart Knobs allow Global Scaling
-            const smartDriveScale = v(p.smartDrive, 50) / 50; // 0..2
-            const smartDynScale = v(p.smartDyn, 50) / 50;   // 0..2
+            const smartDriveScale = v(p.smartDrive, 50) / 50; 
+            const smartDynScale = v(p.smartDyn, 50) / 50; 
 
-            // Calculate Aggregate Layer Values from Curves
             let avgDyn = 0;
             let avgSat = 0;
-            let avgVerb = 0;
             let avgDelay = 0;
             let avgShine = 0;
 
             for (let i = 1; i <= 7; i++) {
-                const d = Math.max(0, v(p[`b${i}Dyn`], 0)) / 18; 
-                const s = Math.max(0, v(p[`b${i}Sat`], 0)) / 18; 
-                const v_ = Math.max(0, v(p[`b${i}Verb`], 0)) / 18;
-                const dl = Math.max(0, v(p[`b${i}Delay`], 0)) / 18;
-                const sh = Math.max(0, v(p[`b${i}Shine`], 0)) / 18;
-                avgDyn += d;
-                avgSat += s;
-                avgVerb += v_;
-                avgDelay += dl;
-                avgShine += sh;
+                avgDyn += Math.max(0, v(p[`b${i}Dyn`], 0)) / 18;
+                avgSat += Math.max(0, v(p[`b${i}Sat`], 0)) / 18;
+                avgDelay += Math.max(0, v(p[`b${i}Delay`], 0)) / 18;
+                avgShine += Math.max(0, v(p[`b${i}Shine`], 0)) / 18;
             }
-            // Average across 7 bands
             avgDyn /= 7;
             avgSat /= 7;
-            avgVerb /= 7;
             avgDelay /= 7;
             avgShine /= 7;
 
-            // Iterate through nodes to find effects and apply params
             nodes.forEach(node => {
-                // Saturation (WaveShaper)
+                // Standard Strip Updates
                 if (node instanceof WaveShaperNode) {
                     const baseDrive = v(p.drive, 0);
                     const drive = (baseDrive + (avgSat * 100)) * smartDriveScale; 
                     (node as any).curve = this.makeDistortionCurve(Math.min(100, drive), module.saturationMode);
                 }
-                // Compressor
                 if (node instanceof DynamicsCompressorNode) {
                     const baseThresh = v(p.threshold, -10);
                     const baseRatio = v(p.ratio, 1);
@@ -679,22 +760,13 @@ class AudioEngine {
 
                     (node as DynamicsCompressorNode).threshold.setTargetAtTime(thresh, t, 0.1);
                     (node as DynamicsCompressorNode).ratio.setTargetAtTime(ratio, t, 0.1);
-                    
-                    if (p.attack !== undefined) (node as DynamicsCompressorNode).attack.setTargetAtTime(v(p.attack, 0.003), t, 0.1);
-                    if (p.release !== undefined) (node as DynamicsCompressorNode).release.setTargetAtTime(v(p.release, 0.25), t, 0.1);
                 }
-                // Delay
-                if (node instanceof DelayNode) {
+                if (node instanceof DelayNode && !(node as any)._hybridType) { // Don't update Doubler delays here
                     const baseTime = v(p.time, 0.2);
                     (node as DelayNode).delayTime.setTargetAtTime(baseTime + (avgDelay * 0.3), t, 0.1);
                 }
-                // Shine (Exciter Filter)
-                if (node instanceof BiquadFilterNode && (node as BiquadFilterNode).frequency.value === 8000) {
-                     let shineBoost = avgShine * 20; // map 0..1 to 0..20dB
-                     if (module.type === PluginType.SHINE) {
-                         shineBoost = 2; 
-                     }
-                     
+                if (node instanceof BiquadFilterNode && (node as BiquadFilterNode).frequency.value === 8000 && !(node as any)._hybridType) {
+                     let shineBoost = avgShine * 20; 
                      const sMode = module.shineMode || 'AIR';
                      if (sMode === 'AIR') { (node as BiquadFilterNode).frequency.setTargetAtTime(12000, t, 0.1); shineBoost *= 1.2; }
                      else if (sMode === 'CRYSTAL') { (node as BiquadFilterNode).frequency.setTargetAtTime(5000, t, 0.1); shineBoost *= 0.8; }
@@ -703,9 +775,34 @@ class AudioEngine {
                      
                      (node as BiquadFilterNode).gain.setTargetAtTime(shineBoost, t, 0.1);
                 }
+                
+                // Output Gain for Strip (If it's the last node of strip, but we might have appended nodes)
+                // We can identify the strip output gain by position or assuming it's a GainNode not marked as hybrid
+                // But simpler is just updating the designated output param on the very last node if we assume standard chain.
+                // With hybrid extra modules, the 'output' param should control the final node?
+                // Or we keep separate outputs.
+                // The `nodes` array contains everything.
             });
+            
+            // Hybrid Extra Updates
+            // We need to group nodes by type to pass to updaters
+            const imagerNodes = nodes.filter(n => (n as any)._hybridType === 'IMAGER');
+            if (imagerNodes.length > 0) updateImager(imagerNodes, p);
+
+            const doublerNodes = nodes.filter(n => (n as any)._hybridType === 'DOUBLER');
+            if (doublerNodes.length > 0) updateDoubler(doublerNodes, p);
+            
+            const chorusNodes = nodes.filter(n => (n as any)._hybridType === 'CHORUS');
+            if (chorusNodes.length > 0) updateChorus(chorusNodes, p);
+
+            // Output Gain - Always the last node of the chain
+            const finalNode = nodes[nodes.length - 1];
+            if (finalNode instanceof GainNode) {
+                finalNode.gain.setTargetAtTime(Math.pow(10, v(p.output, 0) / 20), t, 0.1);
+            }
         }
-        // Pure Shine Type Logic
+        
+        // Pure Shine Logic
         else if (module.type === PluginType.SHINE) {
              nodes.forEach(node => {
                  if (node instanceof BiquadFilterNode && (node as BiquadFilterNode).frequency.value >= 5000) {
@@ -723,20 +820,16 @@ class AudioEngine {
                      (node as BiquadFilterNode).frequency.setTargetAtTime(freq, t, 0.1);
                  }
              });
+             const lastNode = nodes[nodes.length - 1];
+             if (lastNode instanceof GainNode) {
+                 const val = Math.pow(10, v(p.output, 0) / 20);
+                 lastNode.gain.setTargetAtTime(val, t, 0.05);
+            }
         }
-
-        // Output Gain (Last node)
-        const lastNode = nodes[nodes.length - 1];
-        if (lastNode instanceof GainNode) {
-             const val = Math.pow(10, v(p.output, 0) / 20);
-             lastNode.gain.setTargetAtTime(val, t, 0.05);
-        }
-
      }
      else if (module.type === PluginType.SATURATION) {
          const shaper = nodes[0] as WaveShaperNode;
          (shaper as any).curve = this.makeDistortionCurve(v(p.drive, 0), module.saturationMode);
-         
          const gain = nodes[1] as GainNode;
          gain.gain.setTargetAtTime(Math.pow(10, v(p.output, 0) / 20), t, 0.1);
      } 
@@ -763,86 +856,13 @@ class AudioEngine {
          gain.gain.setTargetAtTime(v(p.gain, 0.5), t, 0.1);
      }
      else if (module.type === PluginType.STEREO_IMAGER) {
-         // Nodes: [inputNode, sideHpf, widthGain, stereoGain, panner, outGain, midToMid, midToSide, sideToMid, sideToSide, outGain]
-         const sideHpf = nodes[1] as BiquadFilterNode;
-         const widthGain = nodes[2] as GainNode;
-         const stereoGain = nodes[3] as GainNode;
-         const panner = nodes[4] as StereoPannerNode;
-         const outGain = nodes[5] as GainNode;
-         
-         const midToMid = nodes[6] as GainNode;
-         const midToSide = nodes[7] as GainNode;
-         const sideToMid = nodes[8] as GainNode;
-         const sideToSide = nodes[9] as GainNode;
-
-         const width = v(p.width, 100) / 100;
-         widthGain.gain.setTargetAtTime(width, t, 0.1);
-
-         const bassMonoFreq = v(p.bassMono, 100);
-         sideHpf.frequency.setTargetAtTime(bassMonoFreq, t, 0.1);
-
-         const stereoAmt = v(p.stereoize, 0) / 100;
-         stereoGain.gain.setTargetAtTime(stereoAmt, t, 0.1);
-
-         const pan = v(p.pan, 0) / 100;
-         panner.pan.setTargetAtTime(pan, t, 0.1);
-
-         outGain.gain.setTargetAtTime(Math.pow(10, v(p.output, 0) / 20), t, 0.1);
-         
-         // Matrix Calculations for Rotation and Asymmetry
-         const deg = v(p.rotation, 0);
-         const rad = (deg * Math.PI) / 180;
-         const asym = v(p.asymmetry, 0) / 100; // -1 to 1
-
-         // Basic Rotation:
-         // M' = M cos - S sin
-         // S' = M sin + S cos
-         
-         // Asymmetry effectively adds M to S (skew) or modifies balance
-         // Let's apply Asymmetry as a simple leak factor of Mid into Side *after* rotation, or just modify S gain balance? 
-         // S1 Asymmetry typically shifts the center. S = S + (Asym * M).
-         
-         // Combined Matrix:
-         // M_out = M * cos(rad) - S * sin(rad)
-         // S_temp = M * sin(rad) + S * cos(rad)
-         // S_out = S_temp + (M_out * asym)  <-- Simplified approach for visual center shifting
-         
-         // Let's simplify to just Rotation matrix + Asymmetry Term on M->S
-         // midToMid = cos
-         // sideToMid = -sin
-         // midToSide = sin + (asym * cos)  <-- Asym applied to M component
-         // sideToSide = cos - (asym * sin) <-- Asym applied to S component? No usually Asym depends on M.
-         
-         // Standard rotation first:
-         const cos = Math.cos(rad);
-         const sin = Math.sin(rad);
-         
-         midToMid.gain.setTargetAtTime(cos, t, 0.1);
-         sideToMid.gain.setTargetAtTime(-sin, t, 0.1);
-         
-         // Apply Asymmetry: Add a portion of Mid to Side
-         // S_new = S_rot + (asym * M_rot)
-         // This effectively pans the center channel without panning the hard L/R bounds as much
-         midToSide.gain.setTargetAtTime(sin + (asym * 0.5), t, 0.1); 
-         sideToSide.gain.setTargetAtTime(cos, t, 0.1);
+         updateImager(nodes, p);
      }
      else if (module.type === PluginType.CHORUS) {
-         // [inputNode, delay, osc, oscGain, dry, wet, output]
-         const delay = nodes[1] as DelayNode;
-         const osc = nodes[2] as OscillatorNode;
-         const oscGain = nodes[3] as GainNode;
-         const dry = nodes[4] as GainNode;
-         const wet = nodes[5] as GainNode;
-
-         osc.frequency.setTargetAtTime(v(p.rate, 1.5), t, 0.1);
-         oscGain.gain.setTargetAtTime(v(p.depth, 0.002), t, 0.1);
-         
-         const mix = v(p.mix, 0.5);
-         dry.gain.setTargetAtTime(1 - mix, t, 0.1);
-         wet.gain.setTargetAtTime(mix, t, 0.1);
+         updateChorus(nodes, p);
      }
      else if (module.type === PluginType.FLANGER) {
-         // [inputNode, delay, osc, oscGain, feedback, dry, wet, output]
+         // Flanger is effectively chorus with feedback
          const osc = nodes[2] as OscillatorNode;
          const oscGain = nodes[3] as GainNode;
          const feedback = nodes[4] as GainNode;
@@ -858,28 +878,7 @@ class AudioEngine {
          wet.gain.setTargetAtTime(mix, t, 0.1);
      }
      else if (module.type === PluginType.DOUBLER) {
-        // [inputNode, delayL, delayR, oscL, oscR, oscLGain, oscRGain, wetL, wetR, dry, output]
-        const delayL = nodes[1] as DelayNode;
-        const delayR = nodes[2] as DelayNode;
-        const oscLGain = nodes[5] as GainNode;
-        const oscRGain = nodes[6] as GainNode;
-        const wetL = nodes[7] as GainNode;
-        const wetR = nodes[8] as GainNode;
-        const dry = nodes[9] as GainNode;
-
-        const spread = v(p.spread, 20) / 1000;
-        delayL.delayTime.setTargetAtTime(spread, t, 0.1);
-        delayR.delayTime.setTargetAtTime(spread * 1.5, t, 0.1);
-        
-        // Simulate detune by modulating delay slightly
-        const detuneAmt = v(p.detune, 10) / 10000;
-        oscLGain.gain.setTargetAtTime(detuneAmt, t, 0.1);
-        oscRGain.gain.setTargetAtTime(detuneAmt, t, 0.1);
-        
-        const mix = v(p.mix, 0.5);
-        dry.gain.setTargetAtTime(1 - mix, t, 0.1);
-        wetL.gain.setTargetAtTime(mix, t, 0.1);
-        wetR.gain.setTargetAtTime(mix, t, 0.1);
+         updateDoubler(nodes, p);
      }
   }
 

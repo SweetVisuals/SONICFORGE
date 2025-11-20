@@ -22,7 +22,9 @@ export enum PluginLayer {
   SATURATION = 'SAT',
   SHINE = 'SHINE',
   REVERB = 'VERB',
-  DELAY = 'ECHO'
+  DELAY = 'ECHO',
+  IMAGER = 'WIDTH',
+  MODULATION = 'MOD'
 }
 
 export type SaturationMode = 'TUBE' | 'TAPE' | 'DIGITAL' | 'FUZZ' | 'RECTIFY';

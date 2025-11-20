@@ -1,4 +1,5 @@
 
+
 import React, { useEffect, useRef, useMemo, useState, useCallback } from 'react';
 import { PluginModuleState, PluginType, PluginLayer } from '../types';
 import { audioEngine } from '../services/audioEngine';
@@ -39,7 +40,6 @@ const getY = (db: number, height: number) => {
 
 const getSafeY = (db: number, height: number) => {
     const y = getY(db, height);
-    // Increased margin to 14px (radius is 12px when active) to prevent clipping at edges
     return Math.max(14, Math.min(height - 14, y));
 };
 
@@ -51,25 +51,18 @@ const getDbFromY = (y: number, height: number) => {
     return (center - y) / pxPerDb;
 };
 
-// Helper to get frequency for a band, decoupling Shine from EQ
 const getBandFreq = (layer: PluginLayer, index: number, params: any, module: any) => {
     const band = index + 1;
     const safeParam = (val: any, def: number) => (typeof val === 'number' && Number.isFinite(val) ? val : def);
     
-    // Shine Layer uses separate frequencies if available, or defaults
     if (layer === PluginLayer.SHINE) {
         const shineFreq = params[`b${band}ShineFreq`];
-        // Use the specific Shine frequency if it exists (e.g. in Hybrid mode after merging)
         if (typeof shineFreq === 'number' && Number.isFinite(shineFreq)) {
              return shineFreq;
         }
-        
-        // Fallback defaults if not set
         const defaults = [60, 130, 300, 800, 2000, 5000, 10000];
         return defaults[index] || 10000;
     }
-    
-    // Default / EQ Layer tracks parameters
     return safeParam(params[`b${band}Freq`], 1000);
 };
 
@@ -80,11 +73,9 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
   
   const { params, type, nestedModules, activeLayer, id: moduleId } = module;
   
-  // Use ref for params to avoid stale closures
   const paramsRef = useRef(params);
   paramsRef.current = params;
 
-  // Use ref for module state
   const moduleRef = useRef(module);
   moduleRef.current = module;
 
@@ -114,6 +105,10 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
           }
           if (nestedModules.includes(PluginType.REVERB)) layers.push(PluginLayer.REVERB);
           if (nestedModules.includes(PluginType.DELAY)) layers.push(PluginLayer.DELAY);
+          if (nestedModules.includes(PluginType.STEREO_IMAGER)) layers.push(PluginLayer.IMAGER);
+          if (nestedModules.includes(PluginType.DOUBLER) || nestedModules.includes(PluginType.CHORUS) || nestedModules.includes(PluginType.FLANGER)) {
+              layers.push(PluginLayer.MODULATION);
+          }
       }
       return layers;
   }, [isHybrid, nestedModules]);
@@ -149,11 +144,12 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
         case PluginLayer.SHINE: return { color: '#22d3ee', fill: 'rgba(34, 211, 238, 0.15)' };
         case PluginLayer.REVERB: return { color: '#d946ef', fill: 'rgba(217, 70, 239, 0.15)' };
         case PluginLayer.DELAY: return { color: '#10b981', fill: 'rgba(16, 185, 129, 0.15)' };
+        case PluginLayer.IMAGER: return { color: '#8b5cf6', fill: 'rgba(139, 92, 246, 0.15)' };
+        case PluginLayer.MODULATION: return { color: '#14b8a6', fill: 'rgba(20, 184, 166, 0.15)' };
         case PluginLayer.EQ: default: return { color: '#3b82f6', fill: 'rgba(59, 130, 246, 0.15)' };
     }
   };
 
-  // Drawing Loop
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -166,6 +162,11 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
     let magResponse: Float32Array;
     let phaseResponse: Float32Array;
     let curvePoints: Float32Array;
+    
+    // Data arrays for Vectorscope
+    const { l: analyzerL, r: analyzerR } = audioEngine.getStereoAnalyzers();
+    const dataArrayL = new Uint8Array(analyzerL.frequencyBinCount);
+    const dataArrayR = new Uint8Array(analyzerR.frequencyBinCount);
 
     let animationId: number;
 
@@ -184,6 +185,64 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
       
       if (width === 0 || height === 0) return;
 
+      const curLayer = currentLayerRef.current;
+
+      // --- VECTORSCOPE MODE (For Imager Layer) ---
+      if (curLayer === PluginLayer.IMAGER) {
+          ctx.fillStyle = '#09090b';
+          ctx.fillRect(0, 0, width, height);
+          
+          // Draw Vectorscope
+          analyzerL.getByteTimeDomainData(dataArrayL);
+          analyzerR.getByteTimeDomainData(dataArrayR);
+          
+          const cx = width / 2;
+          const cy = height / 2;
+          const radius = Math.min(width, height) * 0.4;
+
+          // Grid
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.arc(cx, cy, radius * 0.66, 0, Math.PI * 2);
+          ctx.moveTo(cx - radius, cy + radius);
+          ctx.lineTo(cx + radius, cy - radius);
+          ctx.moveTo(cx - radius, cy - radius);
+          ctx.lineTo(cx + radius, cy + radius);
+          ctx.stroke();
+
+          // Labels
+          ctx.fillStyle = '#52525b';
+          ctx.font = '9px Inter';
+          ctx.textAlign = 'center';
+          ctx.fillText('M', cx, cy - radius - 5);
+          ctx.fillText('S', cx + radius + 5, cy);
+
+          // Trace
+          ctx.lineWidth = 1.5;
+          ctx.globalCompositeOperation = 'screen';
+          ctx.strokeStyle = '#8b5cf6'; 
+          
+          ctx.beginPath();
+          const scale = radius;
+          
+          for (let i = 0; i < analyzerL.frequencyBinCount; i += 3) {
+              const l = (dataArrayL[i] - 128) / 128.0;
+              const r = (dataArrayR[i] - 128) / 128.0;
+              const side = (l - r) * 0.707;
+              const mid = (l + r) * 0.707;
+              const x = cx + side * scale;
+              const y = cy - mid * scale;
+              if (i === 0) ctx.moveTo(x, y);
+              else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+          ctx.globalCompositeOperation = 'source-over';
+          return; // Skip EQ drawing
+      }
+
+      // --- SPECTRUM / EQ MODE ---
       if (Math.ceil(width) !== widthInt) {
           widthInt = Math.ceil(width);
           frequencies = new Float32Array(widthInt);
@@ -196,14 +255,13 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
       }
 
       const currentParams = paramsRef.current;
-      const curLayer = currentLayerRef.current;
       const currentModule = moduleRef.current;
       const safeParam = (val: any, def: number) => (typeof val === 'number' && Number.isFinite(val) ? val : def);
       const analyzer = audioEngine.getAnalyzer();
       const bufferLength = analyzer.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
 
-      // Clear
+      // Background
       ctx.fillStyle = '#09090b';
       ctx.fillRect(0, 0, width, height);
 
@@ -224,23 +282,11 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
       ctx.lineTo(width, height/2);
       ctx.stroke();
 
-      ctx.beginPath();
-      [60, 100, 200, 500, 1000, 2000, 5000, 10000].forEach(f => {
-          const x = getX(f, width);
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, height);
-          ctx.fillStyle = '#52525b';
-          ctx.font = '9px Inter';
-          ctx.fillText(f >= 1000 ? `${f/1000}k` : `${f}`, x + 2, height - 4);
-      });
-      ctx.stroke();
-
       // Spectrum
       analyzer.getByteFrequencyData(dataArray);
       ctx.fillStyle = 'rgba(63, 63, 70, 0.15)';
       ctx.beginPath();
       ctx.moveTo(0, height);
-
       const sampleRate = 44100;
       const nyquist = sampleRate / 2;
 
@@ -255,16 +301,17 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
       ctx.lineTo(width, height);
       ctx.fill();
 
-      // Render Layers
+      // Draw EQ Curves
       availableLayers.forEach(layer => {
+          // Skip non-EQ layers for curve drawing, unless you want to show them overlaid
+          // For Modulation/Imager, we skip curve drawing as they don't strictly map to EQ bands
+          if (layer === PluginLayer.IMAGER || layer === PluginLayer.MODULATION) return;
+
           const isLayerActive = layer === curLayer;
           const config = getLayerConfig(layer);
 
-          // Configure Filters for this layer
           filters.forEach((filter, i) => {
               const band = i + 1;
-              
-              // Use decoupled frequency logic
               const freq = getBandFreq(layer, i, currentParams, currentModule);
               let Q = safeParam(currentParams[`b${band}Q`], 1.0);
               let type: BiquadFilterType = 'peaking';
@@ -272,15 +319,11 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
               if (i === 0) type = 'lowshelf';
               else if (i === 6) type = 'highshelf';
 
-              // Adjust filter topology for Shine Mode visualization
               if (layer === PluginLayer.SHINE) {
                   const sMode = currentModule.shineMode || 'AIR';
-                  // Apply mild Q/Type visual tweaks, but stick to param freq
                   if (freq >= 5000 || i >= 4) {
-                      if (sMode === 'GLOSS') {
-                          type = 'peaking';
-                      } else {
-                          // Only the last band is shelf, others peaking
+                      if (sMode === 'GLOSS') type = 'peaking';
+                      else {
                           if (i === 6) type = 'highshelf';
                           else type = 'peaking';
                       }
@@ -303,7 +346,6 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
               filter.gain.value = gainVal;
           });
 
-          // Calculate Curve
           curvePoints.fill(0);
           filters.forEach(filter => {
               filter.getFrequencyResponse(frequencies, magResponse, phaseResponse);
@@ -315,8 +357,6 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
           });
 
           ctx.save();
-          
-          // Fill Active
           if (isLayerActive) {
             ctx.beginPath();
             ctx.moveTo(0, getSafeY(curvePoints[0], height));
@@ -326,7 +366,6 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
             ctx.lineTo(width, height);
             ctx.lineTo(0, height);
             ctx.closePath();
-            
             const grad = ctx.createLinearGradient(0, 0, 0, height);
             grad.addColorStop(0, config.fill);
             grad.addColorStop(1, 'rgba(0,0,0,0)');
@@ -334,7 +373,6 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
             ctx.fill();
           }
 
-          // Stroke Curve
           ctx.beginPath();
           ctx.moveTo(0, getSafeY(curvePoints[0], height));
           for (let i = 1; i < widthInt; i++) {
@@ -357,41 +395,42 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
           ctx.restore();
       });
 
-      // Draw Handles (Active Layer Only)
-      for (let i = 1; i <= 7; i++) {
-          const idx = i - 1;
-          const f = getBandFreq(curLayer, idx, currentParams, currentModule);
+      // Draw Handles (Active Layer Only) - Skip for non-EQ layers
+      if (curLayer !== PluginLayer.MODULATION) {
+          for (let i = 1; i <= 7; i++) {
+              const idx = i - 1;
+              const f = getBandFreq(curLayer, idx, currentParams, currentModule);
+              let g = 0;
+              if (curLayer === PluginLayer.EQ) g = safeParam(currentParams[`b${i}Gain`], 0);
+              else if (curLayer === PluginLayer.DYNAMICS) g = safeParam(currentParams[`b${i}Dyn`], 0);
+              else if (curLayer === PluginLayer.SATURATION) g = safeParam(currentParams[`b${i}Sat`], 0);
+              else if (curLayer === PluginLayer.SHINE) g = safeParam(currentParams[`b${i}Shine`], 0);
+              else if (curLayer === PluginLayer.REVERB) g = safeParam(currentParams[`b${i}Verb`], 0);
+              else if (curLayer === PluginLayer.DELAY) g = safeParam(currentParams[`b${i}Delay`], 0);
 
-          let g = 0;
-          if (curLayer === PluginLayer.EQ) g = safeParam(currentParams[`b${i}Gain`], 0);
-          else if (curLayer === PluginLayer.DYNAMICS) g = safeParam(currentParams[`b${i}Dyn`], 0);
-          else if (curLayer === PluginLayer.SATURATION) g = safeParam(currentParams[`b${i}Sat`], 0);
-          else if (curLayer === PluginLayer.SHINE) g = safeParam(currentParams[`b${i}Shine`], 0);
-          else if (curLayer === PluginLayer.REVERB) g = safeParam(currentParams[`b${i}Verb`], 0);
-          else if (curLayer === PluginLayer.DELAY) g = safeParam(currentParams[`b${i}Delay`], 0);
+              const x = getX(f, width);
+              const y = getSafeY(g, height);
+              
+              const isActive = draggingRef.current === i;
+              const layerCfg = getLayerConfig(curLayer);
+              const color = curLayer === PluginLayer.EQ ? BAND_COLORS[idx] : layerCfg.color;
 
-          const x = getX(f, width);
-          const y = getSafeY(g, height);
-          
-          const isActive = draggingRef.current === i;
-          const layerCfg = getLayerConfig(curLayer);
-          const color = curLayer === PluginLayer.EQ ? BAND_COLORS[idx] : layerCfg.color;
+              if (isActive) {
+                  ctx.beginPath();
+                  ctx.moveTo(x, y);
+                  ctx.lineTo(x, height);
+                  ctx.strokeStyle = color;
+                  ctx.lineWidth = 1;
+                  ctx.setLineDash([2, 4]);
+                  ctx.stroke();
+                  ctx.setLineDash([]);
+              }
 
-          if (isActive) {
               ctx.beginPath();
-              ctx.moveTo(x, y);
-              ctx.lineTo(x, height);
-              ctx.strokeStyle = color;
-              ctx.lineWidth = 1;
-              ctx.setLineDash([2, 4]);
-              ctx.stroke();
-              ctx.setLineDash([]);
+              ctx.arc(x, y, isActive ? 12 : 6, 0, Math.PI * 2);
+              ctx.fillStyle = color;
+              ctx.fill();
           }
-
-          ctx.beginPath();
-          ctx.arc(x, y, isActive ? 12 : 6, 0, Math.PI * 2);
-          ctx.fillStyle = color;
-          ctx.fill();
       }
     };
 
@@ -403,11 +442,12 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
 
   }, [filters, availableLayers]); 
 
-  // --- EVENT HANDLERS ---
-  
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
       e.preventDefault();
       e.stopPropagation();
+      
+      const curLayer = currentLayerRef.current;
+      if (curLayer === PluginLayer.IMAGER || curLayer === PluginLayer.MODULATION) return;
 
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -416,7 +456,6 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
       const y = e.clientY - rect.top;
 
       const currentParams = paramsRef.current;
-      const curLayer = currentLayerRef.current;
       const currentModule = moduleRef.current;
       const safeParam = (val: any, def: number) => (typeof val === 'number' && Number.isFinite(val) ? val : def);
 
@@ -456,6 +495,9 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
       e.preventDefault();
       e.stopPropagation();
       
+      const curLayer = currentLayerRef.current;
+      if (curLayer === PluginLayer.IMAGER || curLayer === PluginLayer.MODULATION) return;
+
       const canvas = canvasRef.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
@@ -470,10 +512,7 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
 
       const clampedVal = Math.max(-18, Math.min(18, val));
       const clampedFreq = Math.max(20, Math.min(20000, freq));
-
-      const curLayer = currentLayerRef.current;
       
-      // Handle Frequency updates based on layer
       if (curLayer === PluginLayer.EQ) {
           onChangeParamRef.current(`b${draggingRef.current}Freq`, clampedFreq);
       } else if (curLayer === PluginLayer.SHINE) {
@@ -496,7 +535,6 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
           try {
             (e.target as Element).releasePointerCapture(e.pointerId);
           } catch (err) {
-             // Ignore error if capture was lost
           }
       }
   }, []);
