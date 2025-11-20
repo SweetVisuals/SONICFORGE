@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { PluginType, PluginModuleState, GemimiCodeResponse, PluginLayer, VisualizerMode, AudioParamConfig, SaturationMode, ShineMode, UIComponent, UIComponentType, RackVariant, SectionVariant } from './types';
-import { PLUGIN_DEFINITIONS, LAYER_TO_PLUGIN_TYPE, createDefaultLayout } from './constants';
+import { PLUGIN_DEFINITIONS, LAYER_TO_PLUGIN_TYPE, createDefaultLayout, BAND_COLORS } from './constants';
 import { Knob } from './components/Knob';
 import { Slider } from './components/Slider';
 import { Switch } from './components/Switch';
@@ -8,6 +8,7 @@ import { Screw } from './components/Screw';
 import { Rack } from './components/Rack';
 import { Visualizer } from './components/Visualizer';
 import { VisualEQ } from './components/VisualEQ';
+import { StereoBar } from './components/StereoBar';
 import { Transport } from './components/Transport';
 import { audioEngine } from './services/audioEngine';
 import { generatePluginCode } from './services/geminiService';
@@ -258,6 +259,7 @@ const RenderSidebarTree: React.FC<{ components: UIComponent[], depth?: number, m
                                comp.type === 'BRANDING' ? <Tag size={10} /> :
                                comp.type === 'VISUALIZER' ? <Waves size={10} /> :
                                comp.type === 'DROPDOWN' ? <List size={10} /> :
+                               comp.type === 'STEREO_BAR' ? <ArrowLeftRight size={10} /> :
                                <Box size={10} />}
                               <span className="text-[10px] font-medium truncate">{comp.label || comp.type}</span>
                         </div>
@@ -296,6 +298,9 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
     
     const alignClass = component.align === 'start' ? 'items-start' : component.align === 'end' ? 'items-end' : component.align === 'stretch' ? 'items-stretch' : 'items-center';
     const justifyClass = component.justify === 'start' ? 'justify-start' : component.justify === 'end' ? 'justify-end' : component.justify === 'between' ? 'justify-between' : 'justify-center';
+    
+    const isFlexChild = parentLayout === 'flex';
+    const heightClass = component.height ? '' : (isFlexChild ? 'h-full' : 'h-auto');
 
     return (
         <div 
@@ -334,11 +339,8 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
                 else if (x < edge) pos = 'left';
                 else if (x > w - edge) pos = 'right';
                 else {
-                    // Inside Zone - Determine Grouping Direction via Quadrants
                     const nx = x / w;
                     const ny = y / h;
-                    
-                    // Diagonals: y = x (ny = nx) and y = 1-x (ny = 1-nx)
                     if (ny < nx && ny < 1 - nx) pos = 'inside-top';
                     else if (ny > nx && ny > 1 - nx) pos = 'inside-bottom';
                     else if (ny > nx && ny < 1 - nx) pos = 'inside-left';
@@ -353,7 +355,6 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
                 e.preventDefault();
                 e.stopPropagation();
                 if (ctx.appMode === 'DESIGNER') {
-                    // Allow dropping from sidebar (draggedComponentId might be null or __NEW_COMPONENT__)
                      if (component.type === 'RACK' && ctx.dragOverInfo?.position?.toString().startsWith('inside')) {
                           ctx.actions.handleDrop(e, component.id, module.id, 'inside');
                      } else {
@@ -363,7 +364,7 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
                 }
                 ctx.actions.setDragOver(null);
             }}
-            className={`relative transition-all duration-200 flex flex-col ${alignClass} ${justifyClass} h-full
+            className={`relative transition-all duration-200 flex flex-col ${alignClass} ${justifyClass} ${heightClass}
                 ${isSelected ? 'ring-1 ring-cyan-500/50 bg-cyan-500/5 rounded-sm' : ''} 
                 ${ctx.appMode === 'DESIGNER' ? 'cursor-grab active:cursor-grabbing hover:bg-white/5 rounded-sm' : ''}
                 ${isDragging ? 'opacity-40 scale-95' : ''}
@@ -371,7 +372,7 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
                 ${parentLayout === 'flex' ? 'flex-1 min-w-0' : ''}
             `}
             style={{ 
-                height: component.type === 'VISUALIZER' ? (component.height || 280) : (component.type === 'SPACER' || component.type === 'BRANDING' ? (component.height || 24) : (component.type === 'RACK' ? 'auto' : undefined)),
+                height: component.type === 'VISUALIZER' || component.type === 'MULTIBAND_CONTROLS' ? (component.height || 280) : (component.type === 'SPACER' || component.type === 'BRANDING' || component.type === 'STEREO_BAR' ? (component.height || 24) : (component.type === 'RACK' ? 'auto' : undefined)),
             }}
         >
             {ctx.dragOverInfo?.id === component.id && (
@@ -429,11 +430,13 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
                          <select 
                             value={
                                 component.paramId === 'saturationMode' ? (module.saturationMode || 'TUBE') :
-                                component.paramId === 'shineMode' ? (module.shineMode || 'AIR') : ''
+                                component.paramId === 'shineMode' ? (module.shineMode || 'AIR') : 
+                                component.paramId === 'multibandStyle' ? (module.multibandStyle || 'CLEAN') : ''
                             }
                             onChange={(e) => {
                                 if (component.paramId === 'saturationMode') ctx.actions.updateModule(module.id, { saturationMode: e.target.value as any });
                                 if (component.paramId === 'shineMode') ctx.actions.updateModule(module.id, { shineMode: e.target.value as any });
+                                if (component.paramId === 'multibandStyle') ctx.actions.updateModule(module.id, { multibandStyle: e.target.value as any });
                             }}
                             className="w-full bg-[#1a1a1a] border border-white/10 rounded p-1.5 text-[10px] font-bold uppercase text-white outline-none focus:border-cyan-500/50 appearance-none cursor-pointer"
                             style={{ color: component.color }}
@@ -454,6 +457,15 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
                                 <option value="SHIMMER">Shimmer</option>
                                 <option value="GLOSS">Gloss</option>
                                 <option value="ANGELIC">Angelic</option>
+                                </>
+                            )}
+                            {component.paramId === 'multibandStyle' && (
+                                <>
+                                <option value="CLEAN">Clean</option>
+                                <option value="PUNCHY">Punchy</option>
+                                <option value="SMOOTH">Smooth</option>
+                                <option value="CRUSH">Crush</option>
+                                <option value="OPTO">Opto</option>
                                 </>
                             )}
                          </select>
@@ -491,6 +503,67 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
                 </div>
             )}
 
+            {component.type === 'STEREO_BAR' && (
+                <div className="w-full h-full pointer-events-auto">
+                    <StereoBar />
+                </div>
+            )}
+
+            {component.type === 'MULTIBAND_CONTROLS' && (
+                 <div className="w-full h-full pointer-events-auto p-2">
+                    <div className="w-full h-full bg-[#080808] rounded-lg border border-white/5 relative overflow-hidden flex items-center justify-between px-6">
+                        {/* Dynamic Background Tint */}
+                        <div 
+                            className="absolute inset-0 opacity-10 pointer-events-none transition-colors duration-300" 
+                            style={{ backgroundColor: BAND_COLORS[(module.selectedBand || 1) - 1] }}
+                        ></div>
+
+                        {/* Left: Band Identity */}
+                        <div className="flex flex-col justify-center z-10 border-r border-white/5 pr-6 h-2/3">
+                            <span className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest mb-1">Selected</span>
+                            <div className="text-3xl font-black uppercase tracking-tighter leading-none transition-colors duration-300" style={{ color: BAND_COLORS[(module.selectedBand || 1) - 1] }}>
+                                Band {module.selectedBand || 1}
+                            </div>
+                        </div>
+                        
+                        {/* Center: Main Power Knob */}
+                        <div className="flex items-center z-10">
+                             <Knob 
+                                label="Ratio" 
+                                value={module.params[`b${module.selectedBand || 1}Ratio`] || 4}
+                                min={1} max={20} unit=":1"
+                                size={64}
+                                variant="cyber"
+                                color={BAND_COLORS[(module.selectedBand || 1) - 1]}
+                                onChange={(val) => ctx.actions.updateParam(module.id, `b${module.selectedBand || 1}Ratio`, val)}
+                             />
+                        </div>
+
+                        {/* Right: Time Controls */}
+                        <div className="flex items-center space-x-4 z-10 pl-6 border-l border-white/5 h-2/3">
+                             <Knob 
+                                label="Attack" 
+                                value={module.params[`b${module.selectedBand || 1}Attack`] || 0.01}
+                                min={0} max={0.2} unit="s"
+                                size={48}
+                                variant="tech"
+                                color={BAND_COLORS[(module.selectedBand || 1) - 1]}
+                                onChange={(val) => ctx.actions.updateParam(module.id, `b${module.selectedBand || 1}Attack`, val)}
+                             />
+                             <Knob 
+                                label="Release" 
+                                value={module.params[`b${module.selectedBand || 1}Release`] || 0.1}
+                                min={0.01} max={1} unit="s"
+                                size={48}
+                                variant="tech"
+                                color={BAND_COLORS[(module.selectedBand || 1) - 1]}
+                                onChange={(val) => ctx.actions.updateParam(module.id, `b${module.selectedBand || 1}Release`, val)}
+                             />
+                        </div>
+                    </div>
+                 </div>
+            )}
+
             {component.type === 'VISUALIZER' && (
                 <div className="w-full h-full pointer-events-auto">
                     {component.visualizerMode === 'VECTORSCOPE' ? (
@@ -500,6 +573,7 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
                             module={module} 
                             onChangeParam={(p, v) => ctx.actions.updateParam(module.id, p, v)} 
                             onLayerChange={(layer) => ctx.actions.updateModule(module.id, { activeLayer: layer })} 
+                            onUpdateModule={(updates) => ctx.actions.updateModule(module.id, updates)}
                         />
                     )}
                 </div>
@@ -535,7 +609,7 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
                                       }
                                   }}
                                 >
-                                    {ctx.dragOverInfo?.id === `${component.id}-slot-${slotIdx}` && (
+                                    {ctx.dragOverInfo?.id?.toString() === `${component.id}-slot-${slotIdx}` && (
                                         <div className="absolute inset-0 bg-cyan-500/20 z-20 flex items-center justify-center border-2 border-cyan-500/50 animate-pulse">
                                             <Plus size={24} className="text-cyan-400" />
                                         </div>
@@ -674,11 +748,14 @@ export default function App() {
       color: def.defaultColor,
       collapsed: false,
       selected: false,
+      selectedBand: 1, // Initialize band 1 as selected
       nestedModules,
       params: def.params.reduce((acc, p) => ({ ...acc, [p.id]: p.value }), {}),
-      activeLayer: PluginLayer.EQ,
+      // Set Dynamics layer active for Multiband by default
+      activeLayer: type === PluginType.MULTIBAND ? PluginLayer.DYNAMICS : PluginLayer.EQ,
       saturationMode: 'TUBE',
       shineMode: 'AIR',
+      multibandStyle: 'CLEAN',
       title: type, 
       layout: createDefaultLayout(type, def.defaultColor, nestedModules)
     };
@@ -749,6 +826,10 @@ export default function App() {
           if (m.id !== moduleId || !m.layout) return m;
           return { ...m, layout: updateNode(m.layout, componentId, updates) };
       }));
+      // Ensure vertical alignment propagates by forcing h-full/items-stretch if needed
+      if (updates.justify) {
+          // No special action needed as RenderComponent handles it
+      }
   };
 
   const removeComponent = (moduleId: string, componentId: string) => {
@@ -979,7 +1060,7 @@ export default function App() {
 
   useEffect(() => {
     audioEngine.updatePluginChain(modules);
-  }, [modules.length, modules.map(m => m.id).join(','), modules.map(m => m.enabled).join(','), modules.map(m => m.saturationMode).join(','), modules.map(m => m.shineMode).join(',')]);
+  }, [modules.length, modules.map(m => m.id).join(','), modules.map(m => m.enabled).join(','), modules.map(m => m.saturationMode).join(','), modules.map(m => m.shineMode).join(','), modules.map(m => m.multibandStyle).join(',')]);
 
   // Code Generation
   const handleGenerateCode = async () => {
@@ -1079,9 +1160,8 @@ export default function App() {
                                 <Sliders size={14} className="text-cyan-500" />
                                 <span className="text-xs font-bold uppercase">{activeModule.title} Settings</span>
                             </div>
-                            {/* Controls are now inside the module layout via DROPDOWNs */}
                             <p className="text-[10px] text-neutral-500">
-                                Global module settings (like Modes) are now available directly on the module controls panel.
+                                Global module settings are available in the Designer panel.
                             </p>
                         </div>
                     )}
@@ -1092,645 +1172,564 @@ export default function App() {
                 <div className="animate-in fade-in slide-in-from-right-4 space-y-8">
                      {selectedModuleId && activeModule ? (
                         <>
-                            {/* --- COMPONENT EDIT MODE --- */}
-                            {activeComponent ? (
-                                <div className="bg-[#0a0a0a] border border-white/10 rounded-sm p-4 space-y-5 relative animate-in slide-in-from-right-8 shadow-xl">
-                                    <button 
-                                        onClick={() => setSelectedComponentId(null)}
-                                        className="flex items-center space-x-1 text-neutral-500 hover:text-white text-[10px] font-bold uppercase tracking-wider mb-2"
-                                    >
-                                        <ChevronLeft size={12} />
-                                        <span>Back to Layout</span>
-                                    </button>
-                                    
-                                    <div className="flex items-center space-x-2 text-white mb-2 border-b border-white/5 pb-2">
-                                        <span className="text-xs font-bold uppercase">Edit {activeComponent.type}</span>
+                            {/* --- ADD ELEMENTS --- */}
+                            <div className="space-y-4">
+                                    <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block">Add Elements</label>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {['KNOB', 'SLIDER', 'SWITCH'].map((type) => (
+                                            <button 
+                                                key={type}
+                                                draggable
+                                                onDragStart={(e) => handleSidebarDragStart(e, {
+                                                    type: type as any,
+                                                    label: type === 'SLIDER' ? 'Fader' : type.charAt(0).toUpperCase() + type.slice(1).toLowerCase(),
+                                                    paramId: 'output',
+                                                    color: activeModule.color,
+                                                    style: 'classic',
+                                                    size: 56,
+                                                    colSpan: 1,
+                                                    orientation: type === 'SLIDER' ? 'vertical' : undefined
+                                                })}
+                                                onClick={() => addComponentToLayout(activeModule.id, {
+                                                    id: generateId(),
+                                                    type: type as any,
+                                                    label: type === 'SLIDER' ? 'Fader' : type.charAt(0).toUpperCase() + type.slice(1).toLowerCase(),
+                                                    paramId: 'output',
+                                                    color: activeModule.color,
+                                                    style: 'classic',
+                                                    size: 56,
+                                                    colSpan: 1,
+                                                    orientation: type === 'SLIDER' ? 'vertical' : undefined
+                                                })}
+                                                className="flex flex-col items-center justify-center p-3 bg-[#0a0a0a] border border-white/10 hover:border-cyan-500/50 hover:bg-cyan-500/5 rounded transition-all group"
+                                            >
+                                                {type === 'KNOB' && <Activity size={16} className="text-neutral-500 group-hover:text-cyan-500 mb-2" />}
+                                                {type === 'SLIDER' && <Sliders size={16} className="text-neutral-500 group-hover:text-cyan-500 mb-2" />}
+                                                {type === 'SWITCH' && <ToggleLeft size={16} className="text-neutral-500 group-hover:text-cyan-500 mb-2" />}
+                                                <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">{type === 'SLIDER' ? 'Fader' : type.charAt(0) + type.slice(1).toLowerCase()}</span>
+                                            </button>
+                                        ))}
                                     </div>
-
-                                    <div className="space-y-4">
-                                        <div>
-                                            <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Label</label>
-                                            <input 
-                                                type="text" 
-                                                value={activeComponent.label}
-                                                onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { label: e.target.value })}
-                                                className="w-full bg-black border border-white/10 rounded p-2 text-xs text-white focus:border-cyan-500/50 outline-none"
-                                            />
-                                        </div>
-                                        
-                                        {activeComponent.type !== 'RACK' && (
-                                            <div className="space-y-4">
-                                                <div>
-                                                    <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Width (Col Span)</label>
-                                                    <div className="grid grid-cols-4 gap-1">
-                                                        {[1, 2, 3, 4].map(span => (
-                                                            <button
-                                                                key={span}
-                                                                onClick={() => updateComponent(activeModule.id, activeComponent.id, { colSpan: span })}
-                                                                className={`h-6 border rounded text-[10px] font-bold flex items-center justify-center transition-all
-                                                                    {(activeComponent.colSpan || 1) === span 
-                                                                        ? 'bg-white text-black border-white' 
-                                                                        : 'bg-black border-white/10 text-neutral-500 hover:border-white/30'}
-                                                                `}
-                                                            >
-                                                                {span === 4 ? 'F' : span}
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                                
-                                                <div className="grid grid-cols-2 gap-4">
-                                                    <div>
-                                                         <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Horz Align</label>
-                                                         <div className="flex bg-black border border-white/10 rounded p-0.5">
-                                                            {['start', 'center', 'end', 'stretch'].map((a: any) => (
-                                                                <button 
-                                                                    key={a}
-                                                                    onClick={() => updateComponent(activeModule.id, activeComponent.id, { align: a })}
-                                                                    className={`flex-1 h-6 flex items-center justify-center rounded-sm ${activeComponent.align === a || (!activeComponent.align && a === 'center') ? 'bg-white/20 text-white' : 'text-neutral-600'}`}
-                                                                    title={a}
-                                                                >
-                                                                    {a === 'start' ? <AlignLeft size={10}/> : a === 'end' ? <AlignRight size={10}/> : a === 'stretch' ? <AlignJustify size={10}/> : <AlignCenter size={10}/>}
-                                                                </button>
-                                                            ))}
-                                                         </div>
-                                                    </div>
-                                                    <div>
-                                                         <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Vert Align</label>
-                                                         <div className="flex bg-black border border-white/10 rounded p-0.5">
-                                                            {[
-                                                                { val: 'start', icon: <ArrowUpToLine size={10}/> }, 
-                                                                { val: 'center', icon: <AlignCenter size={10} className="rotate-90"/> },
-                                                                { val: 'end', icon: <ArrowDownToLine size={10}/> }, 
-                                                                { val: 'stretch', icon: <ArrowUpDown size={10}/> }
-                                                            ].map((opt) => (
-                                                                <button 
-                                                                    key={opt.val}
-                                                                    onClick={() => updateComponent(activeModule.id, activeComponent.id, { justify: opt.val as any })}
-                                                                    className={`flex-1 h-6 flex items-center justify-center rounded-sm ${activeComponent.justify === opt.val || (!activeComponent.justify && opt.val === 'center') ? 'bg-white/20 text-white' : 'text-neutral-600'}`}
-                                                                    title={opt.val}
-                                                                >
-                                                                    {opt.icon}
-                                                                </button>
-                                                            ))}
-                                                         </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        {activeComponent.type === 'SECTION' && (
-                                            <>
-                                                <div>
-                                                    <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Variant</label>
-                                                    <select 
-                                                        value={activeComponent.sectionVariant || 'card'}
-                                                        onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { sectionVariant: e.target.value as SectionVariant })}
-                                                        className="w-full bg-black border border-white/10 rounded p-2 text-xs text-gray-300 outline-none"
-                                                    >
-                                                        <option value="card">Card (Bordered)</option>
-                                                        <option value="solid">Solid (Dark)</option>
-                                                        <option value="simple">Simple (Divider)</option>
-                                                        <option value="glass_row">Glass Row (Horizontal)</option>
-                                                        <option value="minimal">Minimal (Transparent)</option>
-                                                    </select>
-                                                </div>
-                                                <div className="grid grid-cols-2 gap-4">
-                                                    <div>
-                                                        <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Direction</label>
-                                                        <div className="flex bg-black border border-white/10 rounded p-0.5">
-                                                            <button 
-                                                                onClick={() => updateComponent(activeModule.id, activeComponent.id, { layoutDirection: 'column' })}
-                                                                className={`flex-1 h-6 flex items-center justify-center rounded-sm ${activeComponent.layoutDirection !== 'row' ? 'bg-white/20 text-white' : 'text-neutral-600'}`}
-                                                            >
-                                                                <Grid size={10} />
-                                                            </button>
-                                                            <button 
-                                                                onClick={() => updateComponent(activeModule.id, activeComponent.id, { layoutDirection: 'row' })}
-                                                                className={`flex-1 h-6 flex items-center justify-center rounded-sm ${activeComponent.layoutDirection === 'row' ? 'bg-white/20 text-white' : 'text-neutral-600'}`}
-                                                            >
-                                                                <ArrowLeftRight size={10} />
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                    {activeComponent.layoutDirection !== 'row' && (
-                                                        <div>
-                                                            <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Grid Cols</label>
-                                                            <input 
-                                                                type="number" 
-                                                                min="1" max="8"
-                                                                value={activeComponent.gridCols || 4}
-                                                                onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { gridCols: parseInt(e.target.value) })}
-                                                                className="w-full bg-black border border-white/10 rounded p-1.5 text-xs text-white text-center"
-                                                            />
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            </>
-                                        )}
-
-                                        {activeComponent.type === 'RACK' && (
-                                            <>
-                                                <div>
-                                                    <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Rack Style</label>
-                                                    <select 
-                                                        value={activeComponent.rackVariant || 'basic'}
-                                                        onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { rackVariant: e.target.value as RackVariant })}
-                                                        className="w-full bg-black border border-white/10 rounded p-2 text-xs text-gray-300 outline-none"
-                                                    >
-                                                        <option value="basic">Basic (Dark)</option>
-                                                        <option value="industrial">Industrial (Texture)</option>
-                                                        <option value="metal">Brushed Metal</option>
-                                                        <option value="framed">Framed</option>
-                                                        <option value="cyber">Cyber (Neon Grid)</option>
-                                                    </select>
-                                                </div>
-                                                <div>
-                                                    <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Slots (Rows)</label>
-                                                    <div className="flex items-center space-x-2">
-                                                        {[1, 2, 3, 4, 6].map(n => (
-                                                            <button
-                                                                key={n}
-                                                                onClick={() => updateComponent(activeModule.id, activeComponent.id, { rackSplits: n })}
-                                                                className={`w-8 h-8 border rounded text-xs font-bold flex items-center justify-center
-                                                                    {(activeComponent.rackSplits || 4) === n ? 'bg-white text-black' : 'bg-black border-white/10 text-neutral-500'}
-                                                                `}
-                                                            >
-                                                                {n}
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                                <div>
-                                                    <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Height (px)</label>
-                                                    <input 
-                                                        type="number" 
-                                                        value={activeComponent.height || 400}
-                                                        onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { height: parseInt(e.target.value) })}
-                                                        className="w-full bg-black border border-white/10 rounded p-2 text-xs text-white"
-                                                    />
-                                                </div>
-                                            </>
-                                        )}
-
-                                        {(activeComponent.type === 'KNOB' || activeComponent.type === 'SLIDER' || activeComponent.type === 'SWITCH' || activeComponent.type === 'SCREW' || activeComponent.type === 'DROPDOWN') && (
-                                            <>
-                                                {(activeComponent.type !== 'DROPDOWN') && (
-                                                <div>
-                                                    <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Parameter Link</label>
-                                                    <select 
-                                                        value={activeComponent.paramId}
-                                                        onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { paramId: e.target.value })}
-                                                        className="w-full bg-black border border-white/10 rounded p-2 text-xs text-gray-300 outline-none focus:border-cyan-500/50"
-                                                    >
-                                                        {PLUGIN_DEFINITIONS[activeModule.type].params.map(p => (
-                                                            <option key={p.id} value={p.id}>{p.name} ({p.id})</option>
-                                                        ))}
-                                                    </select>
-                                                </div>
-                                                )}
-                                                
-                                                {(activeComponent.type === 'KNOB' || activeComponent.type === 'SCREW') && (
-                                                    <div>
-                                                        <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Size (px)</label>
-                                                        <input 
-                                                            type="number" 
-                                                            value={activeComponent.size || (activeComponent.type === 'KNOB' ? 56 : 14)}
-                                                            onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { size: parseInt(e.target.value) })}
-                                                            className="w-full bg-black border border-white/10 rounded p-2 text-xs text-white"
-                                                        />
-                                                    </div>
-                                                )}
-
-                                                <div className="grid grid-cols-2 gap-4">
-                                                    {(activeComponent.type !== 'DROPDOWN') && (
-                                                    <div>
-                                                        <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Style</label>
-                                                        <select 
-                                                            value={activeComponent.style || 'classic'}
-                                                            onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { style: e.target.value as any })}
-                                                            className="w-full bg-black border border-white/10 rounded p-2 text-xs text-gray-300 outline-none"
-                                                        >
-                                                            <option value="classic">Classic</option>
-                                                            <option value="soft">Soft/Flat</option>
-                                                            <option value="tech">Tech</option>
-                                                            <option value="cyber">Cyber (Neon)</option>
-                                                            <option value="ring">Ring (Glow)</option>
-                                                            <option value="analog">Analog (Real)</option>
-                                                        </select>
-                                                    </div>
-                                                    )}
-                                                    <ColorPicker 
-                                                        label="Accent Color"
-                                                        value={activeComponent.color || '#3b82f6'}
-                                                        onChange={(c) => updateComponent(activeModule.id, activeComponent.id, { color: c })}
-                                                    />
-                                                </div>
-                                                
-                                                {activeComponent.type === 'SLIDER' && (
-                                                    <div>
-                                                        <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Orientation</label>
-                                                        <div className="flex bg-black border border-white/10 rounded p-1">
-                                                            <button onClick={() => updateComponent(activeModule.id, activeComponent.id, { orientation: 'vertical' })} className={`flex-1 text-xs py-1 ${activeComponent.orientation !== 'horizontal' ? 'bg-white/20' : ''}`}>Vert</button>
-                                                            <button onClick={() => updateComponent(activeModule.id, activeComponent.id, { orientation: 'horizontal' })} className={`flex-1 text-xs py-1 ${activeComponent.orientation === 'horizontal' ? 'bg-white/20' : ''}`}>Horz</button>
-                                                        </div>
-                                                    </div>
-                                                )}
-                                            </>
-                                        )}
-                                    </div>
-
-                                    <div className="pt-4 border-t border-white/5 mt-4">
+                                    <div className="grid grid-cols-3 gap-2">
                                         <button 
-                                            onClick={() => removeComponent(activeModule.id, activeComponent.id)}
-                                            className="w-full flex items-center justify-center space-x-2 py-3 bg-red-900/10 hover:bg-red-900/30 border border-red-900/20 hover:border-red-500/50 text-red-400 rounded text-xs font-bold transition-all"
+                                            draggable
+                                            onDragStart={(e) => handleSidebarDragStart(e, { type: 'SECTION', label: 'Group', color: '#ffffff', colSpan: 4, sectionVariant: 'minimal', layoutDirection: 'row', children: [] })}
+                                            onClick={() => addComponentToLayout(activeModule.id, { id: generateId(), type: 'SECTION', label: 'Group', color: '#ffffff', colSpan: 4, sectionVariant: 'minimal', layoutDirection: 'row', children: [] })}
+                                            className="flex flex-col items-center justify-center p-3 bg-[#0a0a0a] border border-white/10 hover:border-amber-500/50 hover:bg-amber-500/5 rounded transition-all group"
                                         >
-                                            <Trash2 size={12} />
-                                            <span>Delete Component</span>
+                                            <Columns size={16} className="text-neutral-500 group-hover:text-amber-500 mb-2" />
+                                            <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Row/Group</span>
+                                        </button>
+                                        <button 
+                                            draggable
+                                            onDragStart={(e) => handleSidebarDragStart(e, { type: 'RACK', label: 'Rack', colSpan: 1, rackSplits: 4, rackVariant: 'industrial', height: 400, children: [] })}
+                                            onClick={() => addComponentToLayout(activeModule.id, { id: generateId(), type: 'RACK', label: 'Rack', colSpan: 1, rackSplits: 4, rackVariant: 'industrial', height: 400, children: [] })}
+                                            className="flex flex-col items-center justify-center p-3 bg-[#0a0a0a] border border-white/10 hover:border-purple-500/50 hover:bg-purple-500/5 rounded transition-all group"
+                                        >
+                                            <Server size={16} className="text-neutral-500 group-hover:text-purple-300 mb-2" />
+                                            <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Rack</span>
+                                        </button>
+                                        <button 
+                                            draggable
+                                            onDragStart={(e) => handleSidebarDragStart(e, { type: 'SCREW', label: 'Screw', colSpan: 1 })}
+                                            onClick={() => addComponentToLayout(activeModule.id, { id: generateId(), type: 'SCREW', label: 'Screw', colSpan: 1 })}
+                                            className="flex flex-col items-center justify-center p-3 bg-[#0a0a0a] border border-white/10 hover:border-zinc-500/50 hover:bg-zinc-500/5 rounded transition-all group"
+                                        >
+                                            <Nut size={16} className="text-neutral-500 group-hover:text-zinc-300 mb-2" />
+                                            <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Screw</span>
                                         </button>
                                     </div>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        <button 
+                                            draggable
+                                            onDragStart={(e) => handleSidebarDragStart(e, { type: 'STEREO_BAR', label: 'Imager', colSpan: 4, height: 32 })}
+                                            onClick={() => addComponentToLayout(activeModule.id, { id: generateId(), type: 'STEREO_BAR', label: 'Imager', colSpan: 4, height: 32 })}
+                                            className="flex flex-col items-center justify-center p-3 bg-[#0a0a0a] border border-white/10 hover:border-cyan-500/50 hover:bg-cyan-500/5 rounded transition-all group"
+                                        >
+                                            <ArrowLeftRight size={16} className="text-neutral-500 group-hover:text-cyan-300 mb-2" />
+                                            <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Stereo Bar</span>
+                                        </button>
+                                    </div>
+                            </div>
+                            
+                            {/* --- STRUCTURE TREE --- */}
+                            <div className="space-y-2 border-t border-white/5 pt-4">
+                                <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block flex items-center justify-between">
+                                    <span>Structure</span>
+                                    <span className="text-[9px] text-neutral-700">Drag to Reorder</span>
+                                </label>
+                                <div className="bg-[#080808] border border-white/5 rounded p-2 max-h-64 overflow-y-auto custom-scrollbar">
+                                    {activeModule.layout && activeModule.layout.length > 0 ? (
+                                        <RenderSidebarTree components={activeModule.layout} moduleId={activeModule.id} ctx={designerContext} />
+                                    ) : (
+                                        <div className="text-[9px] text-neutral-600 p-2 text-center">Empty Layout</div>
+                                    )}
                                 </div>
-                            ) : (
-                                <>
-                                    {/* --- MODULE SETTINGS & LAYOUT --- */}
-                                    <div className="space-y-6 animate-in slide-in-from-left-4">
-                                        {/* REMOVED SIDEBAR MODULE SETTINGS (NOW IN MODULE UI) */}
+                            </div>
 
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block">Add Elements</label>
-                                            <div className="grid grid-cols-3 gap-2">
-                                                <button 
-                                                    draggable
-                                                    onDragStart={(e) => handleSidebarDragStart(e, {
-                                                        type: 'KNOB',
-                                                        label: 'Knob',
-                                                        paramId: 'output',
-                                                        color: activeModule.color,
-                                                        style: 'classic',
-                                                        size: 56,
-                                                        colSpan: 1
-                                                    })}
-                                                    onClick={() => addComponentToLayout(activeModule.id, {
-                                                        id: generateId(),
-                                                        type: 'KNOB',
-                                                        label: 'Knob',
-                                                        paramId: 'output',
-                                                        color: activeModule.color,
-                                                        style: 'classic',
-                                                        size: 56,
-                                                        colSpan: 1
-                                                    })}
-                                                    className="flex flex-col items-center justify-center p-3 bg-[#0a0a0a] border border-white/10 hover:border-purple-500/50 hover:bg-purple-500/5 rounded transition-all group"
-                                                >
-                                                    <Activity size={16} className="text-neutral-500 group-hover:text-purple-500 mb-2" />
-                                                    <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Knob</span>
-                                                </button>
-                                                <button 
-                                                    draggable
-                                                    onDragStart={(e) => handleSidebarDragStart(e, {
-                                                        type: 'SLIDER',
-                                                        label: 'Fader',
-                                                        paramId: 'output',
-                                                        color: activeModule.color,
-                                                        style: 'classic',
-                                                        colSpan: 1,
-                                                        orientation: 'vertical'
-                                                    })}
-                                                    onClick={() => addComponentToLayout(activeModule.id, {
-                                                        id: generateId(),
-                                                        type: 'SLIDER',
-                                                        label: 'Fader',
-                                                        paramId: 'output',
-                                                        color: activeModule.color,
-                                                        style: 'classic',
-                                                        colSpan: 1,
-                                                        orientation: 'vertical'
-                                                    })}
-                                                    className="flex flex-col items-center justify-center p-3 bg-[#0a0a0a] border border-white/10 hover:border-blue-500/50 hover:bg-blue-500/5 rounded transition-all group"
-                                                >
-                                                    <Sliders size={16} className="text-neutral-500 group-hover:text-blue-500 mb-2" />
-                                                    <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Slider</span>
-                                                </button>
-                                                <button 
-                                                    draggable
-                                                    onDragStart={(e) => handleSidebarDragStart(e, {
-                                                        type: 'SWITCH',
-                                                        label: 'Switch',
-                                                        paramId: 'output',
-                                                        color: activeModule.color,
-                                                        style: 'classic',
-                                                        colSpan: 1
-                                                    })}
-                                                    onClick={() => addComponentToLayout(activeModule.id, {
-                                                        id: generateId(),
-                                                        type: 'SWITCH',
-                                                        label: 'Switch',
-                                                        paramId: 'output',
-                                                        color: activeModule.color,
-                                                        style: 'classic',
-                                                        colSpan: 1
-                                                    })}
-                                                    className="flex flex-col items-center justify-center p-3 bg-[#0a0a0a] border border-white/10 hover:border-green-500/50 hover:bg-green-500/5 rounded transition-all group"
-                                                >
-                                                    <ToggleLeft size={16} className="text-neutral-500 group-hover:text-green-500 mb-2" />
-                                                    <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Switch</span>
-                                                </button>
-                                            </div>
-                                            <div className="grid grid-cols-3 gap-2 mt-2">
-                                                <button 
-                                                    draggable
-                                                    onDragStart={(e) => handleSidebarDragStart(e, {
-                                                        type: 'SECTION',
-                                                        label: 'Group',
-                                                        color: '#ffffff',
-                                                        colSpan: 4,
-                                                        sectionVariant: 'minimal',
-                                                        layoutDirection: 'row',
-                                                        children: []
-                                                    })}
-                                                    onClick={() => addComponentToLayout(activeModule.id, {
-                                                        id: generateId(),
-                                                        type: 'SECTION',
-                                                        label: 'Group',
-                                                        color: '#ffffff',
-                                                        colSpan: 4,
-                                                        sectionVariant: 'minimal',
-                                                        layoutDirection: 'row', // Default to horizontal for grouping
-                                                        children: []
-                                                    })}
-                                                    className="flex flex-col items-center justify-center p-3 bg-[#0a0a0a] border border-white/10 hover:border-amber-500/50 hover:bg-amber-500/5 rounded transition-all group"
-                                                >
-                                                    <Columns size={16} className="text-neutral-500 group-hover:text-amber-500 mb-2" />
-                                                    <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Row/Group</span>
-                                                </button>
-                                                <button 
-                                                    draggable
-                                                    onDragStart={(e) => handleSidebarDragStart(e, {
-                                                        type: 'RACK',
-                                                        label: 'Rack',
-                                                        colSpan: 1,
-                                                        rackSplits: 4,
-                                                        rackVariant: 'industrial',
-                                                        height: 400,
-                                                        children: []
-                                                    })}
-                                                    onClick={() => addComponentToLayout(activeModule.id, {
-                                                        id: generateId(),
-                                                        type: 'RACK',
-                                                        label: 'Rack',
-                                                        colSpan: 1,
-                                                        rackSplits: 4,
-                                                        rackVariant: 'industrial',
-                                                        height: 400,
-                                                        children: []
-                                                    })}
-                                                    className="flex flex-col items-center justify-center p-3 bg-[#0a0a0a] border border-white/10 hover:border-cyan-500/50 hover:bg-cyan-500/5 rounded transition-all group"
-                                                >
-                                                    <Server size={16} className="text-neutral-500 group-hover:text-cyan-300 mb-2" />
-                                                    <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Rack</span>
-                                                </button>
-                                                <button 
-                                                    draggable
-                                                    onDragStart={(e) => handleSidebarDragStart(e, {
-                                                        type: 'SCREW',
-                                                        label: 'Screw',
-                                                        colSpan: 1
-                                                    })}
-                                                    onClick={() => addComponentToLayout(activeModule.id, {
-                                                        id: generateId(),
-                                                        type: 'SCREW',
-                                                        label: 'Screw',
-                                                        colSpan: 1
-                                                    })}
-                                                    className="flex flex-col items-center justify-center p-3 bg-[#0a0a0a] border border-white/10 hover:border-zinc-500/50 hover:bg-zinc-500/5 rounded transition-all group"
-                                                >
-                                                    <Nut size={16} className="text-neutral-500 group-hover:text-zinc-300 mb-2" />
-                                                    <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Screw</span>
-                                                </button>
-                                            </div>
+                            {/* --- COMPONENT INSPECTOR (STACKED BELOW STRUCTURE) --- */}
+                            {activeComponent && (
+                                <div className="animate-in slide-in-from-bottom-4 pt-4 border-t border-white/5">
+                                    <div className="flex items-center justify-between mb-3 px-1">
+                                        <div className="flex items-center space-x-2">
+                                            <span className="text-[10px] font-bold uppercase text-cyan-500 tracking-wider">
+                                                Edit {activeComponent.type === 'SECTION' ? 'Group' : activeComponent.type}
+                                            </span>
+                                            <span className="text-[9px] text-neutral-600 font-mono uppercase">
+                                                {activeComponent.id.substring(0,4)}
+                                            </span>
                                         </div>
-                                        
-                                        <div className="space-y-2 border-t border-white/5 pt-4">
-                                            <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block flex items-center justify-between">
-                                                <span>Structure</span>
-                                                <span className="text-[9px] text-neutral-700">Drag to Reorder</span>
-                                            </label>
-                                            <div className="bg-[#080808] border border-white/5 rounded p-2 max-h-64 overflow-y-auto custom-scrollbar">
-                                                {activeModule.layout && activeModule.layout.length > 0 ? (
-                                                    <RenderSidebarTree components={activeModule.layout} moduleId={activeModule.id} ctx={designerContext} />
-                                                ) : (
-                                                    <div className="text-[9px] text-neutral-600 p-2 text-center">Empty Layout</div>
-                                                )}
+                                        <button 
+                                            onClick={() => setSelectedComponentId(null)}
+                                            className="text-neutral-500 hover:text-white transition-colors"
+                                            title="Close Inspector"
+                                        >
+                                            <X size={14} />
+                                        </button>
+                                    </div>
+                                    
+                                    <div className="bg-[#080808] border border-white/10 rounded-lg p-4 space-y-5 shadow-lg relative">
+                                        <div className="space-y-4">
+                                            <div>
+                                                <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Label</label>
+                                                <input 
+                                                    type="text" 
+                                                    value={activeComponent.label}
+                                                    onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { label: e.target.value })}
+                                                    className="w-full bg-black border border-white/10 rounded p-2 text-xs text-white focus:border-cyan-500/50 outline-none transition-colors"
+                                                />
                                             </div>
+                                            
+                                            {activeComponent.type !== 'RACK' && (
+                                                <div className="space-y-4">
+                                                    <div>
+                                                        <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Width (Col Span)</label>
+                                                        <div className="grid grid-cols-4 gap-1">
+                                                            {[1, 2, 3, 4].map(span => (
+                                                                <button
+                                                                    key={span}
+                                                                    onClick={() => updateComponent(activeModule.id, activeComponent.id, { colSpan: span })}
+                                                                    className={`h-6 border rounded text-[10px] font-bold flex items-center justify-center transition-all
+                                                                        {(activeComponent.colSpan || 1) === span 
+                                                                            ? 'bg-white text-black border-white' 
+                                                                            : 'bg-black border-white/10 text-neutral-500 hover:border-white/30'}
+                                                                    `}
+                                                                >
+                                                                    {span === 4 ? 'F' : span}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    <div className="grid grid-cols-2 gap-4">
+                                                        <div>
+                                                                <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Horz Align</label>
+                                                                <div className="flex bg-black border border-white/10 rounded p-0.5">
+                                                                {['start', 'center', 'end', 'stretch'].map((a: any) => (
+                                                                    <button 
+                                                                        key={a}
+                                                                        onClick={() => updateComponent(activeModule.id, activeComponent.id, { align: a })}
+                                                                        className={`flex-1 h-6 flex items-center justify-center rounded-sm ${activeComponent.align === a || (!activeComponent.align && a === 'center') ? 'bg-white/20 text-white' : 'text-neutral-600'}`}
+                                                                        title={a}
+                                                                    >
+                                                                        {a === 'start' ? <AlignLeft size={10}/> : a === 'end' ? <AlignRight size={10}/> : a === 'stretch' ? <AlignJustify size={10}/> : <AlignCenter size={10}/>}
+                                                                    </button>
+                                                                ))}
+                                                                </div>
+                                                        </div>
+                                                        <div>
+                                                                <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Vert Align</label>
+                                                                <div className="flex bg-black border border-white/10 rounded p-0.5">
+                                                                {[
+                                                                    { val: 'start', icon: <ArrowUpToLine size={10}/> }, 
+                                                                    { val: 'center', icon: <AlignCenter size={10} className="rotate-90"/> },
+                                                                    { val: 'end', icon: <ArrowDownToLine size={10}/> }, 
+                                                                    { val: 'stretch', icon: <ArrowUpDown size={10}/> }
+                                                                ].map((opt) => (
+                                                                    <button 
+                                                                        key={opt.val}
+                                                                        onClick={() => updateComponent(activeModule.id, activeComponent.id, { justify: opt.val as any })}
+                                                                        className={`flex-1 h-6 flex items-center justify-center rounded-sm ${activeComponent.justify === opt.val || (!activeComponent.justify && opt.val === 'center') ? 'bg-white/20 text-white' : 'text-neutral-600'}`}
+                                                                        title={opt.val}
+                                                                    >
+                                                                        {opt.icon}
+                                                                    </button>
+                                                                ))}
+                                                                </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {activeComponent.type === 'SECTION' && (
+                                                <>
+                                                    <div>
+                                                        <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Variant</label>
+                                                        <select 
+                                                            value={activeComponent.sectionVariant || 'card'}
+                                                            onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { sectionVariant: e.target.value as SectionVariant })}
+                                                            className="w-full bg-black border border-white/10 rounded p-2 text-xs text-gray-300 outline-none"
+                                                        >
+                                                            <option value="card">Card (Bordered)</option>
+                                                            <option value="solid">Solid (Dark)</option>
+                                                            <option value="simple">Simple (Divider)</option>
+                                                            <option value="glass_row">Glass Row (Horizontal)</option>
+                                                            <option value="minimal">Minimal (Transparent)</option>
+                                                        </select>
+                                                    </div>
+                                                    <div className="grid grid-cols-2 gap-4">
+                                                        <div>
+                                                            <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Direction</label>
+                                                            <div className="flex bg-black border border-white/10 rounded p-0.5">
+                                                                <button 
+                                                                    onClick={() => updateComponent(activeModule.id, activeComponent.id, { layoutDirection: 'column' })}
+                                                                    className={`flex-1 h-6 flex items-center justify-center rounded-sm ${activeComponent.layoutDirection !== 'row' ? 'bg-white/20 text-white' : 'text-neutral-600'}`}
+                                                                >
+                                                                    <Grid size={10} />
+                                                                </button>
+                                                                <button 
+                                                                    onClick={() => updateComponent(activeModule.id, activeComponent.id, { layoutDirection: 'row' })}
+                                                                    className={`flex-1 h-6 flex items-center justify-center rounded-sm ${activeComponent.layoutDirection === 'row' ? 'bg-white/20 text-white' : 'text-neutral-600'}`}
+                                                                >
+                                                                    <ArrowLeftRight size={10} />
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                        {activeComponent.layoutDirection !== 'row' && (
+                                                            <div>
+                                                                <label className="text-[9px] text-neutral-500 uppercase font-bold block mb-1">Grid Cols</label>
+                                                                <input 
+                                                                    type="number" 
+                                                                    min="1" max="8"
+                                                                    value={activeComponent.gridCols || 4}
+                                                                    onChange={(e) => updateComponent(activeModule.id, activeComponent.id, { gridCols: parseInt(e.target.value) })}
+                                                                    className="w-full bg-black border border-white/10 rounded p-1 text-center text-white"
+                                                                />
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </>
+                                            )}
                                         </div>
                                     </div>
-                                </>
+                                </div>
                             )}
                         </>
                      ) : (
-                         <div className="text-center py-8 border border-dashed border-white/10 rounded-lg">
-                             <p className="text-xs text-neutral-500">Select a module to edit design</p>
+                         <div className="flex flex-col items-center justify-center h-64 text-neutral-600 space-y-3 animate-in fade-in">
+                             <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center">
+                                 <MousePointer2 size={20} className="opacity-50" />
+                             </div>
+                             <p className="text-xs">Select a module to design</p>
                          </div>
                      )}
                 </div>
             )}
-          </div>
+            
+            {/* --- ENGINEER MODE (Code Gen) --- */}
+             {appMode === 'ENGINEER' && (
+                 <div className="space-y-6 animate-in fade-in">
+                     <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block">Export Configuration</label>
+                        <textarea 
+                            value={userPrompt}
+                            onChange={(e) => setUserPrompt(e.target.value)}
+                            className="w-full bg-[#0a0a0a] border border-white/10 rounded-sm p-3 text-xs text-neutral-300 focus:border-cyan-500/50 outline-none h-24 resize-none"
+                            placeholder="Describe specific DSP requirements (e.g., 'Use 4x oversampling', 'Add soft clipping to output')..."
+                        />
+                     </div>
+                     
+                     <button 
+                        onClick={handleGenerateCode}
+                        disabled={isGenerating || modules.length === 0}
+                        className={`w-full py-3 rounded font-bold uppercase tracking-widest text-[10px] flex items-center justify-center space-x-2 transition-all
+                            ${isGenerating ? 'bg-neutral-800 text-neutral-500' : 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-lg'}
+                        `}
+                     >
+                         {isGenerating ? <Loader2 className="animate-spin" size={14} /> : <Code size={14} />}
+                         <span>{isGenerating ? 'Generating Source...' : 'Generate C++ Source'}</span>
+                     </button>
 
-          <div className="p-6 border-t border-white/5 bg-[#050505]">
-              <button 
-                  onClick={handleGenerateCode}
-                  disabled={isGenerating || modules.length === 0}
-                  className="w-full h-14 bg-cyan-900/20 hover:bg-cyan-900/40 border border-cyan-500/30 rounded flex items-center justify-center space-x-2 transition-all text-cyan-100 uppercase font-bold tracking-wider text-xs"
-              >
-                  {isGenerating ? <Loader2 className="animate-spin" size={16}/> : <Cpu size={16}/>}
-                  <span>{isGenerating ? 'Generating...' : 'Generate Plugin Source'}</span>
-              </button>
+                     {generatedCode && (
+                        <div className="p-4 bg-green-900/20 border border-green-500/30 rounded flex items-start space-x-3">
+                            <Check size={16} className="text-green-500 mt-0.5" />
+                            <div>
+                                <h3 className="text-xs font-bold text-green-400 mb-1">Code Generated Successfully</h3>
+                                <p className="text-[10px] text-green-300/80 leading-relaxed">
+                                    Your VST3 source code is ready. Switch to the editor view to inspect the files.
+                                </p>
+                            </div>
+                        </div>
+                     )}
+                 </div>
+             )}
           </div>
       </div>
 
-      {/* --- MAIN CONTENT --- */}
-      <div className="flex-1 flex flex-col min-w-0 bg-[#020202] relative">
-        <div className="h-16 border-b border-white/5 flex items-center justify-between px-6 bg-[#050505] shrink-0 z-20">
-             <div className="flex items-center space-x-4">
-                 <div className="relative group">
-                    <input type="file" accept="audio/*" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"/>
-                    <button className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border transition-all ${audioFile ? 'bg-cyan-950/30 border-cyan-900 text-cyan-400' : 'bg-[#0a0a0a] border-white/5 text-neutral-500'}`}>
-                        <PlayCircle size={14} /> <span className="text-[10px] font-bold uppercase tracking-wider">Source</span>
-                    </button>
-                 </div>
-                 {audioFile && <audio ref={audioRef} src={audioFile} onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime || 0)} onLoadedMetadata={() => {setDuration(audioRef.current?.duration || 0); audioEngine.loadSource(audioRef.current!);}} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} className="hidden" />}
-             </div>
+      {/* --- RIGHT MAIN CONTENT --- */}
+      <div className="flex-1 flex flex-col h-full relative bg-[#020202] overflow-hidden">
+          
+          {/* Top Nav */}
+          <div className="h-16 border-b border-white/5 flex items-center justify-between px-6 bg-[#050505] z-20 shrink-0">
+              <div className="flex items-center space-x-4">
+                  <button className="flex items-center space-x-2 px-4 py-1.5 bg-white/5 border border-white/5 rounded-full hover:bg-white/10 transition-colors">
+                      {audioFile ? <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div> : <PlayCircle size={14} className="text-neutral-400" />}
+                      <label className="text-[10px] font-bold uppercase tracking-wide cursor-pointer text-neutral-300">
+                          {audioFile ? 'Source Loaded' : 'Load Source'}
+                          <input type="file" accept="audio/*" className="hidden" onChange={handleFileUpload} />
+                      </label>
+                  </button>
+              </div>
 
-             <div className="flex items-center bg-[#0a0a0a] p-1 rounded-full border border-white/5">
-                {['ARCHITECT', 'DESIGNER', 'ENGINEER'].map(mode => (
-                    <button key={mode} onClick={() => setAppMode(mode as AppMode)} className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all ${appMode === mode ? 'bg-neutral-800 text-white' : 'text-neutral-600 hover:text-neutral-400'}`}>{mode}</button>
-                ))}
-             </div>
-             <div className="w-24"></div>
-        </div>
-
-        {appMode === 'ARCHITECT' && selectedModules.length > 0 && (
-            <div className="fixed top-24 left-1/2 -translate-x-1/2 bg-[#09090b] border border-white/10 px-6 py-3 rounded-full shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex items-center space-x-6 z-50 animate-in slide-in-from-top-4 fade-in border-t border-white/20 backdrop-blur-xl">
-                 <span className="text-xs font-bold text-white flex items-center">
-                     <div className="w-5 h-5 bg-amber-500 rounded-full flex items-center justify-center text-black text-[10px] mr-2">{selectedModules.length}</div>
-                     Selected
-                 </span>
-                 <div className="h-4 w-px bg-white/10"></div>
-                 <button 
-                    onClick={combineSelected}
-                    disabled={!canCombine}
-                    className={`flex items-center space-x-2 px-4 py-2 rounded-full text-xs font-bold uppercase tracking-wider transition-all
-                        ${canCombine 
-                            ? 'bg-amber-500 text-black hover:bg-amber-400' 
-                            : 'bg-white/5 text-neutral-600 cursor-not-allowed'}
+              <div className="flex bg-[#0a0a0a] border border-white/10 rounded-lg p-1">
+                  <button 
+                    onClick={() => setAppMode('ARCHITECT')}
+                    className={`px-4 py-1.5 rounded text-[10px] font-bold uppercase tracking-widest transition-all flex items-center space-x-2
+                        ${appMode === 'ARCHITECT' ? 'bg-white text-black shadow-sm' : 'text-neutral-500 hover:text-neutral-300'}
                     `}
-                 >
-                     <GitMerge size={14} />
-                     <span>Merge</span>
-                 </button>
-                 <button 
-                     onClick={clearSelection}
-                     className="p-2 rounded-full hover:bg-white/10 text-neutral-400 hover:text-white transition-colors"
-                 >
-                     <X size={14} />
-                 </button>
-            </div>
-        )}
+                  >
+                      <Cpu size={12} /> <span>Architect</span>
+                  </button>
+                  <button 
+                    onClick={() => setAppMode('DESIGNER')}
+                    className={`px-4 py-1.5 rounded text-[10px] font-bold uppercase tracking-widest transition-all flex items-center space-x-2
+                        ${appMode === 'DESIGNER' ? 'bg-white text-black shadow-sm' : 'text-neutral-500 hover:text-neutral-300'}
+                    `}
+                  >
+                      <PenTool size={12} /> <span>Designer</span>
+                  </button>
+                  <button 
+                    onClick={() => setAppMode('ENGINEER')}
+                    className={`px-4 py-1.5 rounded text-[10px] font-bold uppercase tracking-widest transition-all flex items-center space-x-2
+                        ${appMode === 'ENGINEER' ? 'bg-white text-black shadow-sm' : 'text-neutral-500 hover:text-neutral-300'}
+                    `}
+                  >
+                      <Terminal size={12} /> <span>Engineer</span>
+                  </button>
+              </div>
+              
+              {canCombine && appMode === 'ARCHITECT' && (
+                  <button 
+                    onClick={combineSelected}
+                    className="flex items-center space-x-2 px-4 py-1.5 bg-yellow-600/20 text-yellow-500 border border-yellow-600/50 rounded hover:bg-yellow-600/30 transition-all animate-pulse"
+                  >
+                      <Merge size={14} />
+                      <span className="text-[10px] font-bold uppercase">Merge Selected ({selectedModules.length})</span>
+                  </button>
+              )}
+              {!canCombine && <div className="w-8"></div>}
+          </div>
 
-        <div className="flex-1 relative overflow-y-auto custom-scrollbar p-10 bg-[#020202]">
-             {(appMode === 'ARCHITECT' || appMode === 'DESIGNER') && modules.length > 0 && (
-                 <div className="max-w-6xl mx-auto space-y-8 pb-32">
-                     
-                     <div className={`transition-all duration-700 ease-[cubic-bezier(0.25,1,0.5,1)] overflow-hidden ${isPlaying ? 'max-h-[300px] opacity-100 mb-8 translate-y-0' : 'max-h-0 opacity-0 mb-0 -translate-y-4'}`}>
-                         <div className="bg-[#050505] rounded border border-white/5 shadow-2xl p-4 relative">
-                             <Visualizer mode={visualizerMode} />
-                         </div>
-                     </div>
-
-                     <div className="space-y-4">
-                        {modules.map((module) => (
-                            <div 
-                                key={module.id} 
-                                onClick={() => selectForSidebar(module.id)}
-                                className={`bg-[#080808] rounded border transition-all relative overflow-hidden group
-                                    ${selectedModuleId === module.id ? 'border-cyan-500/30 shadow-lg shadow-cyan-900/10' : 'border-white/5 hover:border-white/10'}
-                                    ${module.selected ? 'ring-1 ring-amber-500 border-amber-500' : ''}
-                                `}
-                            >
-                                <div className="h-10 flex items-center justify-between px-4 border-b border-white/5 bg-white/[0.01]">
-                                    <div className="flex items-center space-x-3">
-                                        <button onClick={(e) => {e.stopPropagation(); toggleBypass(module.id)}} className={`w-2.5 h-2.5 rounded-full transition-all ${module.enabled ? 'shadow-[0_0_8px_currentColor] scale-110' : 'bg-neutral-800 hover:bg-neutral-700'}`} style={{ backgroundColor: module.enabled ? module.color : '' }} title={module.enabled ? "Bypass" : "Enable"} />
-                                        <span className="text-[11px] font-bold text-gray-300 tracking-widest uppercase truncate max-w-[150px]">{module.title || module.type}</span>
-                                    </div>
-                                    
-                                    {appMode === 'ARCHITECT' && (
-                                        <div className="flex items-center space-x-1 z-20 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                                             <button 
-                                                onClick={(e) => { e.stopPropagation(); toggleSelection(module.id); }} 
-                                                className={`
-                                                    h-6 px-2 rounded-sm flex items-center space-x-1.5 text-[9px] font-bold uppercase tracking-wider transition-all border
-                                                    ${module.selected 
-                                                        ? 'bg-amber-500 text-black border-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.3)]' 
-                                                        : 'bg-transparent border-white/10 text-neutral-500 hover:text-white hover:border-white/30 hover:bg-white/5'}
-                                                `}
-                                             >
-                                                 {module.selected ? <Check size={10} strokeWidth={3} /> : <div className="w-2 h-2 rounded-full border border-current opacity-60" />}
-                                                 <span>{module.selected ? 'Selected' : 'Select'}</span>
-                                             </button>
-
-                                             <button 
-                                                onClick={(e) => { e.stopPropagation(); removeModule(module.id); }}
-                                                className="h-6 w-6 flex items-center justify-center rounded-sm text-neutral-600 hover:text-red-500 hover:bg-red-500/10 transition-colors"
-                                                title="Remove Module"
-                                             >
-                                                 <Trash2 size={12} />
-                                             </button>
-                                        </div>
-                                    )}
-                                    
-                                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/[0.02] to-transparent opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity"></div>
-                                </div>
-
-                                {/* Module Content */}
-                                {!module.collapsed && (
-                                    <div className="p-4 bg-[#0a0a0a] relative min-h-[100px]">
-                                        {module.layout && module.layout.length > 0 ? (
-                                            <div className="grid grid-cols-4 gap-4">
-                                                {module.layout.map((comp, i) => (
-                                                    <RenderComponent key={comp.id} component={comp} module={module} index={i} ctx={designerContext} />
-                                                ))}
-                                            </div>
-                                        ) : (
-                                            <div 
-                                                className={`w-full h-32 border-2 border-dashed rounded flex items-center justify-center transition-colors
-                                                    ${dragOverInfo?.id === `module-${module.id}-root` ? 'border-cyan-500 bg-cyan-900/10' : 'border-white/10 text-neutral-600'}
-                                                `}
-                                                onDragOver={(e) => {
-                                                    e.preventDefault();
-                                                    if (appMode === 'DESIGNER') {
-                                                        setDragOverInfo({ id: `module-${module.id}-root`, position: 'inside' });
-                                                    }
-                                                }}
-                                                onDrop={(e) => {
-                                                    if (appMode === 'DESIGNER') {
-                                                        handleComponentDrop(e, 'ROOT', module.id, 'at_index', 0);
-                                                    }
-                                                }}
-                                            >
-                                                <span className="text-xs font-bold uppercase tracking-widest">Drag components here</span>
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        ))}
-                     </div>
-                 </div>
-             )}
-             
-             {modules.length === 0 && (
-                 <div className="flex flex-col items-center justify-center h-full text-neutral-600 space-y-4">
-                     <Layers size={48} strokeWidth={1} />
-                     <p className="text-sm font-medium">Add a module from the sidebar to begin</p>
-                 </div>
-             )}
-
-            {appMode === 'ENGINEER' && generatedCode && (
-                 <div className="max-w-5xl mx-auto h-full flex flex-col pb-20">
-                      <div className="bg-[#0a0a0a] border border-white/10 rounded-lg overflow-hidden flex-1 flex flex-col">
-                          <div className="h-10 bg-black/50 border-b border-white/5 flex items-center px-4 space-x-4">
-                               <div className="flex items-center space-x-2 text-neutral-400">
-                                   <Code size={14} />
-                                   <span className="text-xs font-bold uppercase">PluginProcessor.cpp</span>
+          {/* Main Workspace */}
+          <div className="flex-1 overflow-hidden relative flex flex-col">
+              {appMode === 'ENGINEER' ? (
+                  <div className="flex-1 overflow-hidden flex">
+                      {generatedCode ? (
+                          <div className="flex-1 flex flex-col bg-[#050505]">
+                               <div className="flex border-b border-white/5">
+                                   <div className="px-6 py-3 text-xs font-mono text-cyan-400 border-b-2 border-cyan-500 bg-white/5">PluginProcessor.cpp</div>
+                                   <div className="px-6 py-3 text-xs font-mono text-neutral-500 hover:text-neutral-300 cursor-pointer">PluginProcessor.h</div>
                                </div>
-                               <div className="flex-1"></div>
-                               <button className="text-[10px] font-bold uppercase text-cyan-500 hover:text-cyan-300 flex items-center space-x-1">
-                                   <Download size={12} />
-                                   <span>Download Source</span>
-                               </button>
+                               <div className="flex-1 overflow-auto p-6 custom-scrollbar">
+                                   <pre className="font-mono text-[11px] leading-relaxed text-neutral-300 whitespace-pre-wrap">
+                                       {generatedCode.cppCode}
+                                   </pre>
+                               </div>
                           </div>
-                          <div className="flex-1 p-6 overflow-auto custom-scrollbar font-mono text-xs text-gray-300 leading-relaxed">
-                              <pre>{generatedCode.cppCode}</pre>
+                      ) : (
+                          <div className="w-full h-full flex flex-col items-center justify-center text-neutral-600 space-y-4">
+                              <Terminal size={48} className="opacity-20" />
+                              <p className="text-xs uppercase tracking-widest font-bold">No Code Generated Yet</p>
                           </div>
+                      )}
+                  </div>
+              ) : (
+                  /* Architect & Designer View */
+                  <div 
+                    className="flex-1 overflow-y-auto overflow-x-hidden p-8 pt-20 custom-scrollbar flex flex-col items-center bg-[radial-gradient(circle_at_center,#111_0%,#020202_100%)]"
+                    onClick={() => { setSelectedModuleId(null); setSelectedComponentId(null); }}
+                  >
+                      {/* Connection Lines Visualization (Simplified) */}
+                      {modules.length > 1 && (
+                          <div className="absolute inset-0 pointer-events-none overflow-visible z-0 opacity-30">
+                               <svg className="w-full h-full">
+                                   {modules.map((m, i) => {
+                                       if (i === modules.length - 1) return null;
+                                       // Approximate positions would need real layout measurement, simpler to just draw a line down the center for now
+                                       return (
+                                            <line 
+                                                key={i}
+                                                x1="50%" y1={(i * 450) + 400} // Crude estimation
+                                                x2="50%" y2={(i * 450) + 450} 
+                                                stroke="#333" 
+                                                strokeWidth="2" 
+                                                strokeDasharray="4 4"
+                                            />
+                                       )
+                                   })}
+                               </svg>
+                          </div>
+                      )}
+
+                      <div className="w-full max-w-5xl space-y-12 pb-24 z-10">
+                          {modules.map((module, idx) => (
+                              <div 
+                                key={module.id}
+                                onClick={(e) => { e.stopPropagation(); setSelectedModuleId(module.id); }}
+                                className={`relative transition-all duration-300 group
+                                    ${selectedModuleId === module.id ? 'scale-[1.02]' : 'scale-100 opacity-90 hover:opacity-100'}
+                                `}
+                              >
+                                  {/* Module Header */}
+                                  <div className={`
+                                      absolute -top-8 left-0 flex items-center space-x-3 px-2 transition-all
+                                      ${selectedModuleId === module.id ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0'}
+                                  `}>
+                                       <span className="text-[10px] font-bold uppercase tracking-widest text-cyan-500">{String(idx + 1).padStart(2, '0')}</span>
+                                       <div className="h-px w-8 bg-cyan-900"></div>
+                                       <span className="text-[10px] font-bold uppercase tracking-widest text-white">{module.type}</span>
+                                       
+                                       {appMode === 'ARCHITECT' && (
+                                            <div className="ml-4 flex items-center space-x-1">
+                                                <button 
+                                                    onClick={(e) => { e.stopPropagation(); toggleBypass(module.id); }}
+                                                    className={`p-1 rounded hover:bg-white/10 ${!module.enabled ? 'text-red-500' : 'text-green-500'}`}
+                                                    title="Bypass"
+                                                >
+                                                    <PlayCircle size={12} />
+                                                </button>
+                                                <button 
+                                                    onClick={(e) => { e.stopPropagation(); toggleSelection(module.id); }}
+                                                    className={`p-1 rounded hover:bg-white/10 ${module.selected ? 'text-yellow-400' : 'text-neutral-600'}`}
+                                                    title="Select for Merge"
+                                                >
+                                                    <Check size={12} />
+                                                </button>
+                                                <button 
+                                                    onClick={(e) => { e.stopPropagation(); removeModule(module.id); }}
+                                                    className="p-1 rounded hover:bg-white/10 text-neutral-600 hover:text-red-500"
+                                                    title="Delete"
+                                                >
+                                                    <Trash2 size={12} />
+                                                </button>
+                                            </div>
+                                       )}
+                                  </div>
+
+                                  {/* Render Layout (Root) */}
+                                  <div 
+                                      className={`
+                                          bg-[#09090b] rounded-xl border shadow-2xl overflow-hidden relative
+                                          ${selectedModuleId === module.id 
+                                            ? 'border-cyan-500/30 shadow-[0_0_50px_rgba(6,182,212,0.05)] ring-1 ring-cyan-500/20' 
+                                            : 'border-[#1a1a1a]'}
+                                      `}
+                                      onDragOver={(e) => {
+                                          if (!module.layout || module.layout.length === 0) {
+                                              e.preventDefault();
+                                              designerContext.actions.setDragOver({ id: 'ROOT', position: 'inside' });
+                                          }
+                                      }}
+                                      onDrop={(e) => {
+                                          if (appMode === 'DESIGNER' && (!module.layout || module.layout.length === 0)) {
+                                              designerContext.actions.handleDrop(e, 'ROOT', module.id, 'inside');
+                                          }
+                                      }}
+                                  >
+                                      {/* Inner Glow */}
+                                      {selectedModuleId === module.id && (
+                                          <div className="absolute inset-0 pointer-events-none bg-cyan-500/5 z-0"></div>
+                                      )}
+                                      
+                                      <div className="relative z-10 p-1">
+                                          {module.layout && module.layout.length > 0 ? (
+                                             /* We map the root components of the layout. Usually it's just one container or branding + rack */
+                                             module.layout.map((comp, i) => (
+                                                 <div key={comp.id} className="mb-1 last:mb-0">
+                                                     <RenderComponent 
+                                                        component={comp} 
+                                                        module={module} 
+                                                        index={i} 
+                                                        ctx={designerContext}
+                                                     />
+                                                 </div>
+                                             ))
+                                          ) : (
+                                              <div className="h-32 flex items-center justify-center border-2 border-dashed border-white/5 rounded-lg m-4">
+                                                  <span className="text-xs text-neutral-700 font-bold uppercase tracking-widest">Drop Components Here</span>
+                                              </div>
+                                          )}
+                                      </div>
+
+                                      {/* Corner Accents */}
+                                      <div className="absolute top-0 left-0 w-4 h-4 border-t border-l border-white/10 rounded-tl pointer-events-none"></div>
+                                      <div className="absolute top-0 right-0 w-4 h-4 border-t border-r border-white/10 rounded-tr pointer-events-none"></div>
+                                      <div className="absolute bottom-0 left-0 w-4 h-4 border-b border-l border-white/10 rounded-bl pointer-events-none"></div>
+                                      <div className="absolute bottom-0 right-0 w-4 h-4 border-b border-r border-white/10 rounded-br pointer-events-none"></div>
+                                  </div>
+                              </div>
+                          ))}
+
+                          {modules.length === 0 && (
+                               <div className="flex flex-col items-center justify-center h-96 text-neutral-600 space-y-6 animate-in fade-in zoom-in-95">
+                                   <div className="w-24 h-24 rounded-full bg-white/5 flex items-center justify-center border border-white/5 shadow-2xl">
+                                       <Layers size={48} className="opacity-20" />
+                                   </div>
+                                   <div className="text-center">
+                                       <h2 className="text-xl font-black text-white tracking-tight mb-2">EMPTY WORKSPACE</h2>
+                                       <p className="text-xs font-medium text-neutral-500 uppercase tracking-widest max-w-xs mx-auto leading-relaxed">
+                                           Select a template from the sidebar to begin architecting your plugin.
+                                       </p>
+                                   </div>
+                               </div>
+                          )}
                       </div>
-                      <div className="mt-4 p-4 bg-[#0a0a0a] border border-white/10 rounded-lg">
-                           <h3 className="text-xs font-bold text-white uppercase mb-2">AI Explanation</h3>
-                           <p className="text-xs text-neutral-400 leading-relaxed">{generatedCode.explanation}</p>
-                      </div>
-                 </div>
-            )}
-        </div>
-        
-        <div className="absolute bottom-0 left-0 right-0">
-            <Transport 
-              isPlaying={isPlaying}
-              currentTime={currentTime}
-              duration={duration}
-              onPlayPause={() => isPlaying ? audioRef.current?.pause() : audioRef.current?.play()}
-              onRestart={() => { if(audioRef.current) audioRef.current.currentTime = 0; }}
-              onSeek={(t) => { if(audioRef.current) audioRef.current.currentTime = t; }}
-            />
-        </div>
+                  </div>
+              )}
+          </div>
+
+          {/* Transport Bar */}
+          <Transport 
+             isPlaying={isPlaying}
+             currentTime={currentTime}
+             duration={duration || 180} // Mock duration if no file
+             onPlayPause={() => {
+                 if (audioRef.current) {
+                     if (isPlaying) {
+                         audioRef.current.pause();
+                         audioEngine.getContext().suspend();
+                     } else {
+                         audioRef.current.play();
+                         audioEngine.resume();
+                     }
+                     setIsPlaying(!isPlaying);
+                 }
+             }}
+             onSeek={(time) => {
+                 if (audioRef.current) {
+                     audioRef.current.currentTime = time;
+                     setCurrentTime(time);
+                 }
+             }}
+             onRestart={() => {
+                 if (audioRef.current) {
+                     audioRef.current.currentTime = 0;
+                 }
+             }}
+          />
+          {/* Hidden Audio Element */}
+          {audioFile && (
+              <audio 
+                ref={audioRef} 
+                src={audioFile} 
+                loop 
+                onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+                onLoadedMetadata={(e) => {
+                    setDuration(e.currentTarget.duration);
+                    audioEngine.loadSource(e.currentTarget);
+                }}
+              />
+          )}
       </div>
     </div>
   );

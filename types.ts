@@ -29,6 +29,7 @@ export enum PluginLayer {
 
 export type SaturationMode = 'TUBE' | 'TAPE' | 'DIGITAL' | 'FUZZ' | 'RECTIFY';
 export type ShineMode = 'AIR' | 'CRYSTAL' | 'SHIMMER' | 'GLOSS' | 'ANGELIC';
+export type MultibandStyle = 'CLEAN' | 'PUNCHY' | 'SMOOTH' | 'CRUSH' | 'OPTO';
 
 export type VisualizerMode = 'SPECTRUM' | 'WAVEFORM' | 'SPECTROGRAM' | 'VECTORSCOPE';
 
@@ -43,7 +44,7 @@ export interface AudioParamConfig {
   hidden?: boolean; // For params controlled solely via graph
 }
 
-export type UIComponentType = 'KNOB' | 'SLIDER' | 'SWITCH' | 'SECTION' | 'SPACER' | 'BRANDING' | 'SCREW' | 'RACK' | 'VISUALIZER' | 'DROPDOWN';
+export type UIComponentType = 'KNOB' | 'SLIDER' | 'SWITCH' | 'SECTION' | 'SPACER' | 'BRANDING' | 'SCREW' | 'RACK' | 'VISUALIZER' | 'DROPDOWN' | 'STEREO_BAR' | 'MULTIBAND_CONTROLS';
 
 export type SectionVariant = 'simple' | 'card' | 'solid' | 'minimal' | 'glass_row';
 export type RackVariant = 'basic' | 'industrial' | 'metal' | 'framed' | 'cyber';
@@ -95,10 +96,12 @@ export interface PluginModuleState {
   color: string; 
   collapsed?: boolean;
   selected?: boolean; // For combining modules
+  selectedBand?: number; // For Multiband/EQ
   nestedModules?: PluginType[]; // Tracks what is combined inside
   activeLayer?: PluginLayer; // Tracks which tab is active in hybrid mode
   saturationMode?: SaturationMode;
   shineMode?: ShineMode;
+  multibandStyle?: MultibandStyle;
   title?: string; // Custom name for the module header
   innerLabel?: string; // Custom text for the visualizer overlay
   layout?: UIComponent[]; // Custom UI layout

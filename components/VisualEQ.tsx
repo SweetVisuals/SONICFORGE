@@ -9,6 +9,7 @@ interface VisualEQProps {
   module: PluginModuleState;
   onChangeParam: (paramId: string, val: number) => void;
   onLayerChange?: (layer: PluginLayer) => void;
+  onUpdateModule?: (updates: Partial<PluginModuleState>) => void;
 }
 
 // --- Math Helpers ---
@@ -40,7 +41,7 @@ const getY = (db: number, height: number) => {
 
 const getSafeY = (db: number, height: number) => {
     const y = getY(db, height);
-    return Math.max(14, Math.min(height - 14, y));
+    return Math.max(16, Math.min(height - 16, y));
 };
 
 const getDbFromY = (y: number, height: number) => {
@@ -66,7 +67,7 @@ const getBandFreq = (layer: PluginLayer, index: number, params: any, module: any
     return safeParam(params[`b${band}Freq`], 1000);
 };
 
-export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLayerChange }) => {
+export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLayerChange, onUpdateModule }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef<number | null>(null);
@@ -84,40 +85,52 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
 
   const onLayerChangeRef = useRef(onLayerChange);
   onLayerChangeRef.current = onLayerChange;
+  
+  const onUpdateModuleRef = useRef(onUpdateModule);
+  onUpdateModuleRef.current = onUpdateModule;
 
-  const currentLayer = activeLayer || PluginLayer.EQ;
+  // Determine Default Layer correctly
+  const isHybrid = type === PluginType.HYBRID_EQ_DYN;
+  const isMultiband = type === PluginType.MULTIBAND;
+  
+  const defaultLayer = isMultiband ? PluginLayer.DYNAMICS : PluginLayer.EQ;
+  const currentLayer = activeLayer || defaultLayer;
+  
   const currentLayerRef = useRef(currentLayer);
   currentLayerRef.current = currentLayer;
 
-  const isHybrid = type === PluginType.HYBRID_EQ_DYN;
-  
   const availableLayers = useMemo(() => {
-      const layers = [PluginLayer.EQ];
+      const layers: PluginLayer[] = [];
+      
       if (isHybrid && nestedModules) {
-          if (nestedModules.includes(PluginType.COMPRESSOR) || nestedModules.includes(PluginType.MULTIBAND)) {
-              layers.push(PluginLayer.DYNAMICS);
-          }
-          if (nestedModules.includes(PluginType.SATURATION)) {
-              layers.push(PluginLayer.SATURATION);
-          }
-          if (nestedModules.includes(PluginType.SHINE)) {
-              layers.push(PluginLayer.SHINE);
-          }
+          if (nestedModules.includes(PluginType.VISUAL_EQ)) layers.push(PluginLayer.EQ);
+          if (nestedModules.includes(PluginType.COMPRESSOR)) layers.push(PluginLayer.DYNAMICS);
+          if (nestedModules.includes(PluginType.SATURATION)) layers.push(PluginLayer.SATURATION);
+          if (nestedModules.includes(PluginType.SHINE)) layers.push(PluginLayer.SHINE);
           if (nestedModules.includes(PluginType.REVERB)) layers.push(PluginLayer.REVERB);
           if (nestedModules.includes(PluginType.DELAY)) layers.push(PluginLayer.DELAY);
           if (nestedModules.includes(PluginType.STEREO_IMAGER)) layers.push(PluginLayer.IMAGER);
-          if (nestedModules.includes(PluginType.DOUBLER) || nestedModules.includes(PluginType.CHORUS) || nestedModules.includes(PluginType.FLANGER)) {
-              layers.push(PluginLayer.MODULATION);
-          }
+          if (nestedModules.includes(PluginType.DOUBLER) || nestedModules.includes(PluginType.CHORUS) || nestedModules.includes(PluginType.FLANGER)) layers.push(PluginLayer.MODULATION);
+
+          if (layers.length === 0) layers.push(PluginLayer.EQ);
+      } else {
+          // Standalone
+          if (type === PluginType.MULTIBAND) layers.push(PluginLayer.DYNAMICS);
+          else if (type === PluginType.SHINE) layers.push(PluginLayer.SHINE); // Could also show EQ but Shine is primary
+          else layers.push(PluginLayer.EQ); 
       }
       return layers;
-  }, [isHybrid, nestedModules]);
+  }, [isHybrid, nestedModules, type]);
 
   useEffect(() => {
-      if (!availableLayers.includes(currentLayer) && onLayerChange) {
-          onLayerChange(PluginLayer.EQ);
+      if (availableLayers.length > 0 && !availableLayers.includes(currentLayer) && onLayerChange) {
+          // Only switch if the current layer is truly invalid for this module type
+          // For Multiband, we want DYNAMICS active by default, but user might want to see EQ curve
+          if (type === PluginType.MULTIBAND && currentLayer === PluginLayer.EQ) return; 
+          
+          onLayerChange(availableLayers[0]);
       }
-  }, [availableLayers, currentLayer, onLayerChange]);
+  }, [availableLayers, currentLayer, onLayerChange, type]);
 
   const ctxMock = useMemo(() => {
       try {
@@ -187,12 +200,11 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
 
       const curLayer = currentLayerRef.current;
 
-      // --- VECTORSCOPE MODE (For Imager Layer) ---
+      // --- VECTORSCOPE MODE ---
       if (curLayer === PluginLayer.IMAGER) {
           ctx.fillStyle = '#09090b';
           ctx.fillRect(0, 0, width, height);
           
-          // Draw Vectorscope
           analyzerL.getByteTimeDomainData(dataArrayL);
           analyzerR.getByteTimeDomainData(dataArrayR);
           
@@ -200,7 +212,6 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
           const cy = height / 2;
           const radius = Math.min(width, height) * 0.4;
 
-          // Grid
           ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
           ctx.lineWidth = 1;
           ctx.beginPath();
@@ -212,14 +223,12 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
           ctx.lineTo(cx + radius, cy + radius);
           ctx.stroke();
 
-          // Labels
           ctx.fillStyle = '#52525b';
           ctx.font = '9px Inter';
           ctx.textAlign = 'center';
           ctx.fillText('M', cx, cy - radius - 5);
           ctx.fillText('S', cx + radius + 5, cy);
 
-          // Trace
           ctx.lineWidth = 1.5;
           ctx.globalCompositeOperation = 'screen';
           ctx.strokeStyle = '#8b5cf6'; 
@@ -239,7 +248,7 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
           }
           ctx.stroke();
           ctx.globalCompositeOperation = 'source-over';
-          return; // Skip EQ drawing
+          return;
       }
 
       // --- SPECTRUM / EQ MODE ---
@@ -261,7 +270,6 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
       const bufferLength = analyzer.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
 
-      // Background
       ctx.fillStyle = '#09090b';
       ctx.fillRect(0, 0, width, height);
 
@@ -303,13 +311,12 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
 
       // Draw EQ Curves
       availableLayers.forEach(layer => {
-          // Skip non-EQ layers for curve drawing, unless you want to show them overlaid
-          // For Modulation/Imager, we skip curve drawing as they don't strictly map to EQ bands
           if (layer === PluginLayer.IMAGER || layer === PluginLayer.MODULATION) return;
 
           const isLayerActive = layer === curLayer;
           const config = getLayerConfig(layer);
 
+          // Configure Filter States from params
           filters.forEach((filter, i) => {
               const band = i + 1;
               const freq = getBandFreq(layer, i, currentParams, currentModule);
@@ -321,14 +328,8 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
 
               if (layer === PluginLayer.SHINE) {
                   const sMode = currentModule.shineMode || 'AIR';
-                  if (freq >= 5000 || i >= 4) {
-                      if (sMode === 'GLOSS') type = 'peaking';
-                      else {
-                          if (i === 6) type = 'highshelf';
-                          else type = 'peaking';
-                      }
-                      Q = 0.7; 
-                  }
+                  if (sMode === 'GLOSS') { type = 'peaking'; Q = 0.5; } 
+                  else { type = i === 6 ? 'highshelf' : 'peaking'; Q = 0.7; }
               }
 
               filter.frequency.value = freq;
@@ -337,7 +338,10 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
 
               let gainVal = 0;
               if (layer === PluginLayer.EQ) gainVal = safeParam(currentParams[`b${band}Gain`], 0);
-              else if (layer === PluginLayer.DYNAMICS) gainVal = safeParam(currentParams[`b${band}Dyn`], 0);
+              else if (layer === PluginLayer.DYNAMICS) {
+                  // Scale dynamics value (-60 to 0) to fit visually within +/- 18 range somewhat
+                  gainVal = safeParam(currentParams[`b${band}Dyn`], 0) * 0.3;
+              }
               else if (layer === PluginLayer.SATURATION) gainVal = safeParam(currentParams[`b${band}Sat`], 0);
               else if (layer === PluginLayer.SHINE) gainVal = safeParam(currentParams[`b${band}Shine`], 0);
               else if (layer === PluginLayer.REVERB) gainVal = safeParam(currentParams[`b${band}Verb`], 0);
@@ -346,6 +350,53 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
               filter.gain.value = gainVal;
           });
 
+          // SPECIAL CASE: Multiband Dynamics Layer - Draw separate curves per band
+          if (isMultiband && layer === PluginLayer.DYNAMICS) {
+              filters.forEach((filter, i) => {
+                   filter.getFrequencyResponse(frequencies, magResponse, phaseResponse);
+                   
+                   // Calculate dB for this specific filter only
+                   for(let k=0; k < widthInt; k++) {
+                       const mag = magResponse[k] < 0.0001 ? 0.0001 : magResponse[k];
+                       curvePoints[k] = 20 * Math.log10(mag);
+                   }
+
+                   const bandColor = BAND_COLORS[i];
+                   const isBandSelected = currentModule.selectedBand === (i + 1);
+                   const zeroY = getY(0, height);
+                   
+                   ctx.save();
+                   ctx.beginPath();
+                   ctx.moveTo(0, zeroY); // Fill from center/0dB line, not bottom, so cuts look like dips
+                   for (let k = 0; k < widthInt; k++) {
+                       ctx.lineTo(k, getSafeY(curvePoints[k], height));
+                   }
+                   ctx.lineTo(width, zeroY);
+                   ctx.closePath();
+
+                   const grad = ctx.createLinearGradient(0, 0, 0, height);
+                   grad.addColorStop(0, bandColor + (isBandSelected ? '55' : '22')); 
+                   grad.addColorStop(1, bandColor + '00');
+                   
+                   ctx.fillStyle = grad;
+                   ctx.fill();
+
+                   ctx.beginPath();
+                   for (let k = 0; k < widthInt; k++) {
+                       const y = getSafeY(curvePoints[k], height);
+                       if (k===0) ctx.moveTo(k, y);
+                       else ctx.lineTo(k, y);
+                   }
+                   ctx.lineWidth = isBandSelected ? 2 : 1;
+                   ctx.strokeStyle = bandColor;
+                   ctx.globalAlpha = isBandSelected ? 1.0 : 0.6;
+                   ctx.stroke();
+                   ctx.restore();
+              });
+              return; // Skip standard summing logic
+          }
+
+          // Standard Logic: Sum curves
           curvePoints.fill(0);
           filters.forEach(filter => {
               filter.getFrequencyResponse(frequencies, magResponse, phaseResponse);
@@ -395,14 +446,14 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
           ctx.restore();
       });
 
-      // Draw Handles (Active Layer Only) - Skip for non-EQ layers
+      // Draw Handles
       if (curLayer !== PluginLayer.MODULATION) {
           for (let i = 1; i <= 7; i++) {
               const idx = i - 1;
               const f = getBandFreq(curLayer, idx, currentParams, currentModule);
               let g = 0;
               if (curLayer === PluginLayer.EQ) g = safeParam(currentParams[`b${i}Gain`], 0);
-              else if (curLayer === PluginLayer.DYNAMICS) g = safeParam(currentParams[`b${i}Dyn`], 0);
+              else if (curLayer === PluginLayer.DYNAMICS) g = safeParam(currentParams[`b${i}Dyn`], 0) * 0.3; // Scaled for visual
               else if (curLayer === PluginLayer.SATURATION) g = safeParam(currentParams[`b${i}Sat`], 0);
               else if (curLayer === PluginLayer.SHINE) g = safeParam(currentParams[`b${i}Shine`], 0);
               else if (curLayer === PluginLayer.REVERB) g = safeParam(currentParams[`b${i}Verb`], 0);
@@ -411,11 +462,14 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
               const x = getX(f, width);
               const y = getSafeY(g, height);
               
+              const isSelected = currentModule.selectedBand === i;
               const isActive = draggingRef.current === i;
               const layerCfg = getLayerConfig(curLayer);
-              const color = curLayer === PluginLayer.EQ ? BAND_COLORS[idx] : layerCfg.color;
+              
+              // Multiband uses distinct band colors for dynamics handles too
+              const color = (curLayer === PluginLayer.EQ || (isMultiband && curLayer === PluginLayer.DYNAMICS)) ? BAND_COLORS[idx] : layerCfg.color;
 
-              if (isActive) {
+              if (isActive || isSelected) {
                   ctx.beginPath();
                   ctx.moveTo(x, y);
                   ctx.lineTo(x, height);
@@ -424,11 +478,26 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
                   ctx.setLineDash([2, 4]);
                   ctx.stroke();
                   ctx.setLineDash([]);
+                  
+                  if (isSelected) {
+                      ctx.beginPath();
+                      ctx.arc(x, y, 16, 0, Math.PI*2);
+                      ctx.fillStyle = color;
+                      ctx.globalAlpha = 0.2;
+                      ctx.fill();
+                      ctx.globalAlpha = 1.0;
+                  }
               }
 
               ctx.beginPath();
-              ctx.arc(x, y, isActive ? 12 : 6, 0, Math.PI * 2);
+              ctx.arc(x, y, isActive || isSelected ? 8 : 6, 0, Math.PI * 2);
               ctx.fillStyle = color;
+              ctx.fill();
+              
+              // White center dot
+              ctx.beginPath();
+              ctx.arc(x, y, 2, 0, Math.PI*2);
+              ctx.fillStyle = '#fff';
               ctx.fill();
           }
       }
@@ -469,7 +538,7 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
           
           let val = 0;
           if (curLayer === PluginLayer.EQ) val = safeParam(currentParams[`b${i}Gain`], 0);
-          else if (curLayer === PluginLayer.DYNAMICS) val = safeParam(currentParams[`b${i}Dyn`], 0);
+          else if (curLayer === PluginLayer.DYNAMICS) val = safeParam(currentParams[`b${i}Dyn`], 0) * 0.3; // Scaled check
           else if (curLayer === PluginLayer.SATURATION) val = safeParam(currentParams[`b${i}Sat`], 0);
           else if (curLayer === PluginLayer.SHINE) val = safeParam(currentParams[`b${i}Shine`], 0);
           else if (curLayer === PluginLayer.REVERB) val = safeParam(currentParams[`b${i}Verb`], 0);
@@ -486,6 +555,7 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
 
       if (closestBand) {
           draggingRef.current = closestBand;
+          if (onUpdateModuleRef.current) onUpdateModuleRef.current({ selectedBand: closestBand });
           (e.target as Element).setPointerCapture(e.pointerId);
       }
   }, []);
@@ -510,13 +580,26 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
       
       if (!Number.isFinite(freq) || !Number.isFinite(val)) return;
 
-      const clampedVal = Math.max(-18, Math.min(18, val));
+      let minDb = -18;
+      let maxDb = 18;
+      let valueToSet = val;
+      
+      if (curLayer === PluginLayer.DYNAMICS) {
+          minDb = -60; 
+          maxDb = 0;
+          // Inverse scaling: Visual / 0.3 = Param
+          valueToSet = val / 0.3;
+      }
+
+      const clampedVal = Math.max(minDb, Math.min(maxDb, valueToSet));
       const clampedFreq = Math.max(20, Math.min(20000, freq));
       
       if (curLayer === PluginLayer.EQ) {
           onChangeParamRef.current(`b${draggingRef.current}Freq`, clampedFreq);
       } else if (curLayer === PluginLayer.SHINE) {
           onChangeParamRef.current(`b${draggingRef.current}ShineFreq`, clampedFreq);
+      } else if (curLayer === PluginLayer.DYNAMICS) {
+          onChangeParamRef.current(`b${draggingRef.current}Freq`, clampedFreq);
       }
 
       if (curLayer === PluginLayer.EQ) onChangeParamRef.current(`b${draggingRef.current}Gain`, clampedVal);
@@ -538,6 +621,12 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
           }
       }
   }, []);
+  
+  const labelText = module.innerLabel || (
+      currentLayer === PluginLayer.EQ ? 'PARAMETRIC EQ' : 
+      currentLayer === PluginLayer.DYNAMICS && isMultiband ? 'MULTIBAND DYNAMICS' :
+      `${isMultiband ? 'MULTIBAND' : 'HYBRID'} ${currentLayer} LAYER`
+  );
 
   return (
     <div 
@@ -546,7 +635,8 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
       onMouseDown={(e) => e.stopPropagation()}
       onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
     >
-      {isHybrid && (
+      {/* Layer Tabs: Show if Hybrid OR if Multiband (Standalone which acts like hybrid layer) */}
+      {(isHybrid || isMultiband) && (
           <div className="flex bg-[#0a0a0a] border-b border-white/5 overflow-x-auto no-scrollbar">
               {availableLayers.map(layer => (
                   <button
@@ -578,8 +668,8 @@ export const VisualEQ: React.FC<VisualEQProps> = ({ module, onChangeParam, onLay
         />
         
         <div className="absolute top-3 left-3 flex flex-col space-y-1 pointer-events-none opacity-50">
-           <span className={`text-[10px] font-mono tracking-widest bg-black/50 px-2 py-1 rounded ${isHybrid ? 'text-yellow-500' : 'text-white'}`}>
-               {module.innerLabel || (currentLayer === PluginLayer.EQ ? 'PARAMETRIC EQ' : `HYBRID ${currentLayer} LAYER`)}
+           <span className={`text-[10px] font-mono tracking-widest bg-black/50 px-2 py-1 rounded ${isHybrid || isMultiband ? 'text-yellow-500' : 'text-white'}`}>
+               {labelText}
            </span>
            {isHybrid && currentLayer === PluginLayer.SHINE && (
                <span className="text-[9px] font-mono tracking-tight text-cyan-400 bg-black/50 px-2 py-0.5 rounded self-start">

@@ -154,22 +154,19 @@ class AudioEngine {
       this.pluginNodes.set(module.id, nodes);
 
       if (nodes.length > 0 && previousNode) {
-        // For standard linear chains:
-        if (module.type === PluginType.STEREO_IMAGER || module.type === PluginType.HYBRID_EQ_DYN) {
-             // Complex modules manage their own internal connection.
-             // Input is nodes[0], Output is nodes[last].
-             // Simply bridge Previous -> Input.
-             const inputNode = nodes[0];
-             const outputNode = nodes[nodes.length - 1];
+        // For parallel processing modules (Multiband, Hybrid with Split, etc)
+        // Input is nodes[0], Output is nodes[last].
+        const inputNode = nodes[0];
+        const outputNode = nodes[nodes.length - 1];
+        
+        if (module.type === PluginType.STEREO_IMAGER || module.type === PluginType.HYBRID_EQ_DYN || module.type === PluginType.MULTIBAND) {
              previousNode.connect(inputNode);
              previousNode = outputNode;
         } else if (module.type === PluginType.CHORUS || module.type === PluginType.FLANGER || module.type === PluginType.DOUBLER) {
-            // Complex Routing handled in createNodes
             previousNode.connect(nodes[0]);
-            previousNode = nodes[nodes.length - 1]; // Output Mix
+            previousNode = nodes[nodes.length - 1]; 
         } else {
             previousNode.connect(nodes[0]);
-            // Connect internal nodes linearly
             for (let i = 0; i < nodes.length - 1; i++) {
               nodes[i].connect(nodes[i+1]);
             }
@@ -221,15 +218,14 @@ class AudioEngine {
         const isHybrid = type === PluginType.HYBRID_EQ_DYN;
         const isShine = type === PluginType.SHINE;
 
-        // Check for modules in nest
         const hasSat = isHybrid && nestedModules && nestedModules.includes(PluginType.SATURATION);
-        const hasComp = isHybrid && (!nestedModules || nestedModules.includes(PluginType.COMPRESSOR) || nestedModules.includes(PluginType.MULTIBAND));
+        const hasComp = isHybrid && (!nestedModules || nestedModules.includes(PluginType.COMPRESSOR));
+        // NOTE: Multiband inside hybrid reuses global comp for now, as true MB inside Hybrid is too complex for this chain logic
+        // unless we swap the whole block, but for Hybrid "Smart", it's typically a channel strip comp.
         const hasReverb = isHybrid && nestedModules?.includes(PluginType.REVERB);
         const hasDelay = isHybrid && nestedModules?.includes(PluginType.DELAY);
         const hasShine = isHybrid && nestedModules?.includes(PluginType.SHINE);
 
-        // 2. Dynamics (Saturation + Compression) or Shine Exciter
-        
         if (hasSat) {
             const shaper = this.context.createWaveShaper();
             shaper.curve = this.makeDistortionCurve(0, module.saturationMode || 'TUBE'); 
@@ -252,7 +248,6 @@ class AudioEngine {
             nodes.push(comp);
         }
 
-        // 3. Time Based Effects
         if (hasDelay) {
             const delay = this.context.createDelay(5.0);
             delay.delayTime.value = 0.3;
@@ -269,37 +264,29 @@ class AudioEngine {
             nodes.push(convolver);
         }
         
-        // 4. Output Gain (for the Strip)
         const gain = this.context.createGain();
         gain.gain.value = Math.pow(10, v('output', 0) / 20);
         nodes.push(gain);
 
-        // Connect standard strip nodes linearly
         for (let i = 0; i < nodes.length - 1; i++) {
             nodes[i].connect(nodes[i+1]);
         }
 
-        // 5. Handle Hybrid Extra Modules (Imager, Doubler, etc)
+        // Handle Hybrid Extra Modules
         if (isHybrid && nestedModules) {
              let lastNode = nodes[nodes.length - 1];
 
              if (nestedModules.includes(PluginType.STEREO_IMAGER)) {
                  const imagerNodes = this.createImagerNodes(params);
-                 imagerNodes.forEach(n => (n as any)._hybridType = 'IMAGER'); // Mark for updates
-                 
-                 // Append: lastNode -> imagerInput
+                 imagerNodes.forEach(n => (n as any)._hybridType = 'IMAGER'); 
                  lastNode.connect(imagerNodes[0]);
-                 
-                 // Push nodes to main array for cleanup
                  nodes.push(...imagerNodes);
-                 // Update lastNode to imager output
                  lastNode = imagerNodes[imagerNodes.length - 1];
              }
 
              if (nestedModules.includes(PluginType.DOUBLER)) {
                  const doublerNodes = this.createDoublerNodes(params);
                  doublerNodes.forEach(n => (n as any)._hybridType = 'DOUBLER');
-                 
                  lastNode.connect(doublerNodes[0]);
                  nodes.push(...doublerNodes);
                  lastNode = doublerNodes[doublerNodes.length - 1];
@@ -308,25 +295,17 @@ class AudioEngine {
              if (nestedModules.includes(PluginType.CHORUS)) {
                  const chorusNodes = this.createChorusNodes(params);
                  chorusNodes.forEach(n => (n as any)._hybridType = 'CHORUS');
-
                  lastNode.connect(chorusNodes[0]);
                  nodes.push(...chorusNodes);
                  lastNode = chorusNodes[chorusNodes.length - 1];
              }
-             
-             // Ensure the array returned has the true input at [0] and true output at [last]
-             // nodes[0] is the first filter, which is correct.
-             // lastNode is now the output of the full hybrid chain.
         }
 
         return nodes;
       }
       
       case PluginType.MULTIBAND: {
-          const comp = this.context.createDynamicsCompressor();
-          comp.threshold.value = v('midThresh', -20);
-          comp.ratio.value = v('ratio', 4);
-          return [comp];
+          return this.createMultibandNodes(params);
       }
 
       case PluginType.COMPRESSOR: {
@@ -398,7 +377,55 @@ class AudioEngine {
     }
   }
 
-  // --- Node Creation Helpers for Reuse ---
+  // --- Node Creation Helpers ---
+
+  private createMultibandNodes(params: any): AudioNode[] {
+      const v = (key: string, def: number) => (typeof params[key] === 'number' ? params[key] : def);
+      
+      const input = this.context.createGain();
+      const output = this.context.createGain();
+
+      // 7-Band Parallel Processing Topology
+      // Allows "Dynamic EQ" style interaction where user drags bands to compress specific ranges
+      const bandNodes: AudioNode[] = [];
+      
+      // We need to track the band components to update them later
+      // Structure: [Input, Output, ...Band1Nodes, ...Band2Nodes, ...]
+      bandNodes.push(input, output);
+
+      for (let i = 1; i <= 7; i++) {
+           // Each band: Input -> Biquad (Peaking/Bandpass) -> Compressor -> Gain -> Output
+           const filter = this.context.createBiquadFilter();
+           // Using Peaking to allow broad strokes, or Bandpass for isolation. 
+           // "Dynamic EQ" usually implies Peaking filters that reduce gain.
+           // However, to mimic standard Multiband where bands sum to unity, we use broad Q peaking or shelf.
+           // For this visualizer-driven approach, we'll use Peaking filters but heavily compressed.
+           // A true multiband split is complex, this is a functional approximation for the web.
+           filter.type = 'peaking'; 
+           filter.frequency.value = v(`b${i}Freq`, 1000);
+           filter.Q.value = v(`b${i}Q`, 1.0);
+           filter.gain.value = 0; // Filter gain is static EQ, we want Dynamic.
+           
+           const comp = this.context.createDynamicsCompressor();
+           comp.threshold.value = v(`b${i}Dyn`, -24); // "Dyn" param maps to threshold
+           comp.ratio.value = v(`b${i}Ratio`, 4);
+           comp.attack.value = v(`b${i}Attack`, 0.01);
+           comp.release.value = v(`b${i}Release`, 0.2);
+
+           const bandGain = this.context.createGain();
+           bandGain.gain.value = 1.0; // Make up gain or band mix
+
+           input.connect(filter);
+           filter.connect(comp);
+           comp.connect(bandGain);
+           bandGain.connect(output);
+
+           // Store in order: Filter, Compressor, Gain
+           bandNodes.push(filter, comp, bandGain);
+      }
+
+      return bandNodes;
+  }
   
   private createImagerNodes(params: any): AudioNode[] {
       const v = (key: string, def: number) => (typeof params[key] === 'number' ? params[key] : def);
@@ -745,7 +772,6 @@ class AudioEngine {
             avgShine /= 7;
 
             nodes.forEach(node => {
-                // Standard Strip Updates
                 if (node instanceof WaveShaperNode) {
                     const baseDrive = v(p.drive, 0);
                     const drive = (baseDrive + (avgSat * 100)) * smartDriveScale; 
@@ -761,7 +787,7 @@ class AudioEngine {
                     (node as DynamicsCompressorNode).threshold.setTargetAtTime(thresh, t, 0.1);
                     (node as DynamicsCompressorNode).ratio.setTargetAtTime(ratio, t, 0.1);
                 }
-                if (node instanceof DelayNode && !(node as any)._hybridType) { // Don't update Doubler delays here
+                if (node instanceof DelayNode && !(node as any)._hybridType) { 
                     const baseTime = v(p.time, 0.2);
                     (node as DelayNode).delayTime.setTargetAtTime(baseTime + (avgDelay * 0.3), t, 0.1);
                 }
@@ -775,17 +801,8 @@ class AudioEngine {
                      
                      (node as BiquadFilterNode).gain.setTargetAtTime(shineBoost, t, 0.1);
                 }
-                
-                // Output Gain for Strip (If it's the last node of strip, but we might have appended nodes)
-                // We can identify the strip output gain by position or assuming it's a GainNode not marked as hybrid
-                // But simpler is just updating the designated output param on the very last node if we assume standard chain.
-                // With hybrid extra modules, the 'output' param should control the final node?
-                // Or we keep separate outputs.
-                // The `nodes` array contains everything.
             });
             
-            // Hybrid Extra Updates
-            // We need to group nodes by type to pass to updaters
             const imagerNodes = nodes.filter(n => (n as any)._hybridType === 'IMAGER');
             if (imagerNodes.length > 0) updateImager(imagerNodes, p);
 
@@ -795,14 +812,12 @@ class AudioEngine {
             const chorusNodes = nodes.filter(n => (n as any)._hybridType === 'CHORUS');
             if (chorusNodes.length > 0) updateChorus(chorusNodes, p);
 
-            // Output Gain - Always the last node of the chain
             const finalNode = nodes[nodes.length - 1];
             if (finalNode instanceof GainNode) {
                 finalNode.gain.setTargetAtTime(Math.pow(10, v(p.output, 0) / 20), t, 0.1);
             }
         }
         
-        // Pure Shine Logic
         else if (module.type === PluginType.SHINE) {
              nodes.forEach(node => {
                  if (node instanceof BiquadFilterNode && (node as BiquadFilterNode).frequency.value >= 5000) {
@@ -826,6 +841,38 @@ class AudioEngine {
                  lastNode.gain.setTargetAtTime(val, t, 0.05);
             }
         }
+     }
+     else if (module.type === PluginType.MULTIBAND) {
+          // Nodes: Input, Output, ... 7 x (Filter, Comp, Gain)
+          // Indexes: 0=Input, 1=Output, 
+          // Band 1: 2=Filter, 3=Comp, 4=Gain
+          // Band 2: 5=Filter, 6=Comp, 7=Gain ...
+          
+          const output = nodes[1] as GainNode;
+          
+          for(let i = 1; i <= 7; i++) {
+              const baseIdx = 2 + (i - 1) * 3;
+              const filter = nodes[baseIdx] as BiquadFilterNode;
+              const comp = nodes[baseIdx + 1] as DynamicsCompressorNode;
+              const gain = nodes[baseIdx + 2] as GainNode;
+
+              if(filter && comp && gain) {
+                  filter.frequency.setTargetAtTime(v(`b${i}Freq`, 1000), t, 0.05);
+                  filter.Q.setTargetAtTime(v(`b${i}Q`, 1.0), t, 0.05);
+                  
+                  comp.threshold.setTargetAtTime(v(`b${i}Dyn`, -24), t, 0.1);
+                  comp.ratio.setTargetAtTime(v(`b${i}Ratio`, 4), t, 0.1);
+                  comp.attack.setTargetAtTime(v(`b${i}Attack`, 0.01), t, 0.1);
+                  comp.release.setTargetAtTime(v(`b${i}Release`, 0.2), t, 0.1);
+                  
+                  // Gain maps to standard EQ gain, but here it is output mix of the band
+                  // Since we are doing parallel, if user boosts band gain, we boost that band
+                  const db = v(`b${i}Gain`, 0);
+                  gain.gain.setTargetAtTime(Math.pow(10, db/20), t, 0.1);
+              }
+          }
+
+          output.gain.setTargetAtTime(Math.pow(10, v(p.output, 0) / 20), t, 0.1);
      }
      else if (module.type === PluginType.SATURATION) {
          const shaper = nodes[0] as WaveShaperNode;

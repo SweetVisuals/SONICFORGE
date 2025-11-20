@@ -1,5 +1,3 @@
-
-
 import { PluginType, AudioParamConfig, PluginLayer, UIComponent } from './types';
 
 // Band Colors matching Fruity PEQ2 / FabFilter style
@@ -26,9 +24,8 @@ const generateEqParams = () => {
         );
 
         // Layer Params (Hidden by default, used when layers active)
-        // Defaulting to 0 (Center/Flat) instead of -18 (Bottom)
         // Dynamics: Value represents compression intensity/threshold shift
-        params.push({ id: `b${i}Dyn`, name: `Band ${i} Dyn`, value: 0, min: -18, max: 18, step: 0.1, unit: '', hidden: true });
+        params.push({ id: `b${i}Dyn`, name: `Band ${i} Dyn`, value: 0, min: -60, max: 0, step: 0.5, unit: 'dB', hidden: true });
         // Saturation: Value represents drive intensity
         params.push({ id: `b${i}Sat`, name: `Band ${i} Sat`, value: 0, min: -18, max: 18, step: 0.1, unit: '', hidden: true });
         
@@ -40,6 +37,13 @@ const generateEqParams = () => {
         params.push({ id: `b${i}Verb`, name: `Band ${i} Verb`, value: 0, min: -18, max: 18, step: 0.1, unit: '', hidden: true });
         // Delay: Value represents feedback/mix
         params.push({ id: `b${i}Delay`, name: `Band ${i} Delay`, value: 0, min: -18, max: 18, step: 0.1, unit: '', hidden: true });
+        
+        // Extra Dynamics Params per band (For Multiband)
+        params.push(
+            { id: `b${i}Ratio`, name: `Band ${i} Ratio`, value: 4, min: 1, max: 20, step: 0.1, unit: ':1', hidden: true },
+            { id: `b${i}Attack`, name: `Band ${i} Attack`, value: 0.01, min: 0, max: 0.2, step: 0.001, unit: 's', hidden: true },
+            { id: `b${i}Release`, name: `Band ${i} Release`, value: 0.1, min: 0.01, max: 1, step: 0.01, unit: 's', hidden: true }
+        );
     }
     
     params.push({ id: 'output', name: 'Output', value: 0, min: -24, max: 24, step: 0.1, unit: 'dB' });
@@ -72,16 +76,11 @@ export const PLUGIN_DEFINITIONS: Record<PluginType, { params: AudioParamConfig[]
     ]
   },
   [PluginType.MULTIBAND]: {
-    description: "Multi-band compression with adjustable crossovers.",
+    description: "Multi-band compression with visual spectral control.",
     defaultColor: "#f43f5e",
     icon: "activity",
     params: [
-      { id: 'lowSplit', name: 'Low X-Over', value: 200, min: 50, max: 500, step: 10, unit: 'Hz' },
-      { id: 'highSplit', name: 'High X-Over', value: 3000, min: 1000, max: 10000, step: 10, unit: 'Hz' },
-      { id: 'lowThresh', name: 'Low Thr', value: -20, min: -60, max: 0, step: 1, unit: 'dB' },
-      { id: 'midThresh', name: 'Mid Thr', value: -20, min: -60, max: 0, step: 1, unit: 'dB' },
-      { id: 'highThresh', name: 'High Thr', value: -20, min: -60, max: 0, step: 1, unit: 'dB' },
-      { id: 'ratio', name: 'Ratio', value: 4, min: 1, max: 10, step: 0.1, unit: ':1' }
+      ...EQ_PARAMS, // Uses EQ bands but mapped to parallel compression
     ]
   },
   [PluginType.COMPRESSOR]: {
@@ -212,9 +211,19 @@ export const createDefaultLayout = (type: PluginType, defaultColor: string, nest
         height: 40
     });
     
+    // 1.5 Add Stereo Bar if Hybrid (Positioned above visualizer)
+    if (isHybrid && nestedModules?.includes(PluginType.STEREO_IMAGER)) {
+        layout.push({
+            id: Math.random().toString(36).substring(2, 9),
+            type: 'STEREO_BAR',
+            label: 'Stereo Field',
+            colSpan: 4,
+            height: 32 
+        });
+    }
+    
     // 2. Add Visualizer
-    // For Hybrid, we might want to support switching visualization modes, but VisualEQ handles that internally based on active layer now
-    if (type === PluginType.VISUAL_EQ || type === PluginType.HYBRID_EQ_DYN || type === PluginType.SHINE) {
+    if (type === PluginType.VISUAL_EQ || type === PluginType.HYBRID_EQ_DYN || type === PluginType.SHINE || type === PluginType.MULTIBAND) {
         layout.push({
             id: Math.random().toString(36).substring(2, 9),
             type: 'VISUALIZER',
@@ -253,8 +262,8 @@ export const createDefaultLayout = (type: PluginType, defaultColor: string, nest
              style: 'classic'
          });
     }
-
-    // 3a. Process Standard Hybrid Params (EQ, Strip)
+    
+    // 3a. Process Standard Params
     params.forEach(p => {
         if (p.hidden) return;
         
@@ -271,11 +280,19 @@ export const createDefaultLayout = (type: PluginType, defaultColor: string, nest
              else if (p.id === 'output') { visibleOnLayer = undefined; color = defaultColor; }
              else { visibleOnLayer = PluginLayer.EQ; color = '#3b82f6'; } // Default bands
              
-             // Filter out params for layers that aren't active in the nest
              if (visibleOnLayer && visibleOnLayer !== PluginLayer.EQ) {
                   const requiredTypes = LAYER_TO_PLUGIN_TYPE[visibleOnLayer];
                   const hasRequired = nestedModules?.some(nm => requiredTypes.includes(nm));
                   if (!hasRequired && !p.id.startsWith('smart')) return; 
+             }
+        }
+        
+        // Multiband Specific Visibility
+        if (type === PluginType.MULTIBAND) {
+             if (p.id === 'output') {
+                 // Global output allowed
+             } else {
+                 return; // Skip params, handled by MULTIBAND_CONTROLS
              }
         }
 
@@ -291,20 +308,119 @@ export const createDefaultLayout = (type: PluginType, defaultColor: string, nest
         });
     });
 
-    // 3b. Process Extra Nested Modules (Imager, Doubler, etc.) into the SAME Control section
+    // 3b. Process Extra Nested Modules 
     if (isHybrid && nestedModules) {
         nestedModules.forEach(subType => {
-            // Skip standard layers handled above
             if ([PluginType.VISUAL_EQ, PluginType.COMPRESSOR, PluginType.MULTIBAND, PluginType.SATURATION, PluginType.SHINE, PluginType.REVERB, PluginType.DELAY].includes(subType)) return;
             
-            const subParams = PLUGIN_DEFINITIONS[subType].params;
             let targetLayer = PluginLayer.EQ;
-            
             if (subType === PluginType.STEREO_IMAGER) targetLayer = PluginLayer.IMAGER;
             else if ([PluginType.CHORUS, PluginType.DOUBLER, PluginType.FLANGER].includes(subType)) targetLayer = PluginLayer.MODULATION;
 
+            // --- CUSTOM LAYOUT: STEREO IMAGER ---
+            if (subType === PluginType.STEREO_IMAGER) {
+                 knobComponents.push({
+                    id: Math.random().toString(36).substring(2, 9),
+                    type: 'SECTION',
+                    label: 'Stereo Processor',
+                    colSpan: 4,
+                    sectionVariant: 'solid',
+                    visibleOnLayer: PluginLayer.IMAGER,
+                    layoutDirection: 'column',
+                    children: [
+                        {
+                            id: Math.random().toString(36).substring(2, 9),
+                            type: 'SECTION',
+                            label: 'Core',
+                            colSpan: 4,
+                            sectionVariant: 'minimal',
+                            layoutDirection: 'row',
+                            children: [
+                                {
+                                    id: Math.random().toString(36).substring(2, 9),
+                                    type: 'KNOB',
+                                    label: 'Bass Mono',
+                                    paramId: 'bassMono',
+                                    color: '#a78bfa',
+                                    size: 56,
+                                    style: 'tech'
+                                },
+                                {
+                                    id: Math.random().toString(36).substring(2, 9),
+                                    type: 'SPACER', 
+                                    label: '',
+                                    colSpan: 1
+                                },
+                                {
+                                    id: Math.random().toString(36).substring(2, 9),
+                                    type: 'KNOB',
+                                    label: 'Width',
+                                    paramId: 'width',
+                                    color: '#8b5cf6',
+                                    size: 80, 
+                                    style: 'cyber'
+                                },
+                                {
+                                    id: Math.random().toString(36).substring(2, 9),
+                                    type: 'SPACER',
+                                    label: '',
+                                    colSpan: 1
+                                },
+                                {
+                                    id: Math.random().toString(36).substring(2, 9),
+                                    type: 'KNOB',
+                                    label: 'Stereoize',
+                                    paramId: 'stereoize',
+                                    color: '#a78bfa',
+                                    size: 56,
+                                    style: 'tech'
+                                }
+                            ]
+                        },
+                        {
+                            id: Math.random().toString(36).substring(2, 9),
+                            type: 'SECTION',
+                            label: 'Geometry',
+                            colSpan: 4,
+                            sectionVariant: 'glass_row',
+                            layoutDirection: 'row',
+                            children: [
+                                {
+                                    id: Math.random().toString(36).substring(2, 9),
+                                    type: 'KNOB',
+                                    label: 'Pan',
+                                    paramId: 'pan',
+                                    color: '#94a3b8',
+                                    size: 42,
+                                    style: 'soft'
+                                },
+                                {
+                                    id: Math.random().toString(36).substring(2, 9),
+                                    type: 'SLIDER',
+                                    label: 'Asymmetry',
+                                    paramId: 'asymmetry',
+                                    color: '#8b5cf6',
+                                    orientation: 'horizontal',
+                                    style: 'cyber'
+                                },
+                                {
+                                    id: Math.random().toString(36).substring(2, 9),
+                                    type: 'KNOB',
+                                    label: 'Rotation',
+                                    paramId: 'rotation',
+                                    color: '#94a3b8',
+                                    size: 42,
+                                    style: 'soft'
+                                }
+                            ]
+                        }
+                    ]
+                 });
+                 return; 
+            }
+
+            const subParams = PLUGIN_DEFINITIONS[subType].params;
             subParams.forEach(p => {
-                 // Skip output param of nested modules to avoid duplicate masters
                  if (p.id === 'output') return; 
 
                  let type: any = 'KNOB';
@@ -320,14 +436,66 @@ export const createDefaultLayout = (type: PluginType, defaultColor: string, nest
                      size: type === 'KNOB' ? 56 : undefined,
                      colSpan: type === 'SLIDER' ? 1 : 1,
                      orientation: 'vertical',
-                     style: subType === PluginType.STEREO_IMAGER ? 'cyber' : 'classic',
+                     style: 'classic',
                      visibleOnLayer: targetLayer
                  });
             });
         });
     }
+    
+    // Special Logic for MULTIBAND CONTROLS
+    if (type === PluginType.MULTIBAND) {
+         layout.push({
+             id: Math.random().toString(36).substring(2, 9),
+             type: 'SECTION',
+             label: 'Controls',
+             colSpan: 4,
+             sectionVariant: 'solid', // Use solid background for better contrast
+             children: [
+                 // Style Dropdown Row
+                 {
+                     id: Math.random().toString(36).substring(2, 9),
+                     type: 'SECTION',
+                     label: 'Top',
+                     colSpan: 4,
+                     sectionVariant: 'minimal',
+                     layoutDirection: 'row',
+                     children: [
+                         {
+                             id: Math.random().toString(36).substring(2, 9),
+                             type: 'DROPDOWN',
+                             label: 'Style',
+                             paramId: 'multibandStyle',
+                             color: '#f43f5e',
+                             colSpan: 3,
+                             style: 'classic'
+                         },
+                         {
+                             id: Math.random().toString(36).substring(2, 9),
+                             type: 'KNOB',
+                             label: 'Output',
+                             paramId: 'output',
+                             color: defaultColor,
+                             size: 48,
+                             style: 'classic',
+                             colSpan: 1
+                         }
+                     ]
+                 },
+                 // Per-Band Controls handled by custom component that reads selectedBand state
+                 {
+                     id: Math.random().toString(36).substring(2, 9),
+                     type: 'MULTIBAND_CONTROLS',
+                     label: 'Band Settings',
+                     colSpan: 4,
+                     height: 140 // Explicit height for the panel
+                 }
+             ]
+         });
+         return layout;
+    }
 
-    // 4. Wrap Knobs in a single Section
+    // 4. Wrap Knobs
     layout.push({
         id: Math.random().toString(36).substring(2, 9),
         type: 'SECTION',
@@ -338,7 +506,7 @@ export const createDefaultLayout = (type: PluginType, defaultColor: string, nest
         color: '#ffffff'
     });
 
-    // Special layout for Standalone Imager (If explicitly requested as main type)
+    // Special layout for Standalone Imager
     if (type === PluginType.STEREO_IMAGER) {
          return [
             {
@@ -373,7 +541,7 @@ export const createDefaultLayout = (type: PluginType, defaultColor: string, nest
                  colSpan: 4,
                  sectionVariant: 'card',
                  gridCols: 4,
-                 children: knobComponents // Reuse generated knobs or define custom
+                 children: knobComponents 
             }
          ];
     }
