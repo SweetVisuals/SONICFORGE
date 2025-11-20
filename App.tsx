@@ -20,14 +20,14 @@ import {
   Waves, Grid, Sparkles, Tag, Plus, Trash2, LayoutTemplate, ChevronLeft, List, Move,
   Maximize, Columns, Image as ImageIcon, Type, AlignLeft, AlignCenter, AlignRight, MousePointer2,
   CornerDownRight, FolderOpen, ToggleLeft, Sliders, Nut, Circle, Server, AlignJustify, ArrowLeftRight, ArrowUpDown, GripHorizontal, Flame,
-  ChevronDown
+  ChevronDown, Wind, Copy, Users
 } from 'lucide-react';
 
 const generateId = () => Math.random().toString(36).substring(2, 9);
 
 type AppMode = 'ARCHITECT' | 'DESIGNER' | 'ENGINEER';
 
-type DragPosition = 'left' | 'right' | 'top' | 'bottom' | 'inside';
+type DragPosition = 'left' | 'right' | 'top' | 'bottom' | 'inside' | 'inside-top' | 'inside-bottom' | 'inside-left' | 'inside-right';
 
 // Helper component for styled color input
 const ColorPicker = ({ value, onChange, label }: { value: string, onChange: (val: string) => void, label?: string }) => (
@@ -171,17 +171,25 @@ const DropZone = ({ position }: { position: DragPosition }) => {
     return (
         <div 
             className={`
-                absolute z-50 bg-cyan-500/60 border-2 border-cyan-400 rounded-sm animate-in fade-in zoom-in-95 pointer-events-none shadow-[0_0_15px_rgba(34,211,238,0.5)]
-                ${position === 'top' ? 'top-0 left-0 right-0 h-1.5' : ''}
-                ${position === 'bottom' ? 'bottom-0 left-0 right-0 h-1.5' : ''}
-                ${position === 'left' ? 'left-0 top-0 bottom-0 w-1.5' : ''}
-                ${position === 'right' ? 'right-0 top-0 bottom-0 w-1.5' : ''}
-                ${position === 'inside' ? 'inset-0 bg-cyan-500/20 border-dashed border-4' : ''}
+                absolute z-50 pointer-events-none animate-in fade-in zoom-in-95
+                ${position === 'top' ? 'top-0 left-0 right-0 h-1.5 bg-cyan-500 rounded-full shadow-[0_0_10px_#22d3ee]' : ''}
+                ${position === 'bottom' ? 'bottom-0 left-0 right-0 h-1.5 bg-cyan-500 rounded-full shadow-[0_0_10px_#22d3ee]' : ''}
+                ${position === 'left' ? 'left-0 top-0 bottom-0 w-1.5 bg-cyan-500 rounded-full shadow-[0_0_10px_#22d3ee]' : ''}
+                ${position === 'right' ? 'right-0 top-0 bottom-0 w-1.5 bg-cyan-500 rounded-full shadow-[0_0_10px_#22d3ee]' : ''}
+                
+                ${position === 'inside' ? 'inset-0 bg-cyan-500/20 border-2 border-cyan-400 border-dashed' : ''}
+                
+                ${position === 'inside-top' ? 'inset-x-0 top-0 h-1/2 bg-cyan-500/20 border-b-2 border-cyan-400 border-dashed' : ''}
+                ${position === 'inside-bottom' ? 'inset-x-0 bottom-0 h-1/2 bg-cyan-500/20 border-t-2 border-cyan-400 border-dashed' : ''}
+                ${position === 'inside-left' ? 'inset-y-0 left-0 w-1/2 bg-cyan-500/20 border-r-2 border-cyan-400 border-dashed' : ''}
+                ${position === 'inside-right' ? 'inset-y-0 right-0 w-1/2 bg-cyan-500/20 border-l-2 border-cyan-400 border-dashed' : ''}
             `}
         >
-            {position === 'inside' && (
+            {position.toString().startsWith('inside') && (
                 <div className="absolute inset-0 flex items-center justify-center">
-                     <CornerDownRight size={24} className="text-cyan-400 drop-shadow-lg" />
+                     {(position === 'inside-top' || position === 'inside-bottom') && <ArrowUpDown size={24} className="text-cyan-400 drop-shadow-lg" />}
+                     {(position === 'inside-left' || position === 'inside-right') && <ArrowLeftRight size={24} className="text-cyan-400 drop-shadow-lg" />}
+                     {position === 'inside' && <CornerDownRight size={24} className="text-cyan-400 drop-shadow-lg" />}
                 </div>
             )}
         </div>
@@ -319,7 +327,7 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
                 const w = rect.width;
                 const h = rect.height;
 
-                const edge = Math.min(40, Math.min(w, h) * 0.25); 
+                const edge = Math.min(15, Math.min(w, h) * 0.2); 
                 
                 let pos: DragPosition = 'inside';
 
@@ -327,7 +335,17 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
                 else if (y > h - edge) pos = 'bottom';
                 else if (x < edge) pos = 'left';
                 else if (x > w - edge) pos = 'right';
-                else pos = 'inside';
+                else {
+                    // Inside Zone - Determine Grouping Direction via Quadrants
+                    const nx = x / w;
+                    const ny = y / h;
+                    
+                    // Diagonals: y = x (ny = nx) and y = 1-x (ny = 1-nx)
+                    if (ny < nx && ny < 1 - nx) pos = 'inside-top';
+                    else if (ny > nx && ny > 1 - nx) pos = 'inside-bottom';
+                    else if (ny > nx && ny < 1 - nx) pos = 'inside-left';
+                    else pos = 'inside-right';
+                }
 
                 if (ctx.dragOverInfo?.id !== component.id || ctx.dragOverInfo?.position !== pos) {
                     ctx.actions.setDragOver({ id: component.id, position: pos });
@@ -336,8 +354,9 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
             onDrop={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                if (ctx.appMode === 'DESIGNER' && ctx.draggedComponentId && ctx.draggedComponentId !== component.id) {
-                     if (component.type === 'RACK' && ctx.dragOverInfo?.position === 'inside') {
+                if (ctx.appMode === 'DESIGNER') {
+                    // Allow dropping from sidebar (draggedComponentId might be null or __NEW_COMPONENT__)
+                     if (component.type === 'RACK' && ctx.dragOverInfo?.position?.toString().startsWith('inside')) {
                           ctx.actions.handleDrop(e, component.id, module.id, 'inside');
                      } else {
                          const pos = ctx.dragOverInfo?.id === component.id && ctx.dragOverInfo?.position ? ctx.dragOverInfo.position : 'inside';
@@ -476,11 +495,15 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
 
             {component.type === 'VISUALIZER' && (
                 <div className="w-full h-full pointer-events-auto">
-                    <VisualEQ 
-                        module={module} 
-                        onChangeParam={(p, v) => ctx.actions.updateParam(module.id, p, v)} 
-                        onLayerChange={(layer) => ctx.actions.updateModule(module.id, { activeLayer: layer })} 
-                    />
+                    {component.visualizerMode === 'VECTORSCOPE' ? (
+                        <Visualizer mode="VECTORSCOPE" />
+                    ) : (
+                        <VisualEQ 
+                            module={module} 
+                            onChangeParam={(p, v) => ctx.actions.updateParam(module.id, p, v)} 
+                            onLayerChange={(layer) => ctx.actions.updateModule(module.id, { activeLayer: layer })} 
+                        />
+                    )}
                 </div>
             )}
 
@@ -748,12 +771,20 @@ export default function App() {
       setTimeout(() => setDraggedComponentId(id), 0);
   };
 
+  const handleSidebarDragStart = (e: React.DragEvent, template: Partial<UIComponent>) => {
+      e.dataTransfer.setData('application/vst-component', JSON.stringify(template));
+      e.dataTransfer.effectAllowed = 'copy';
+      setDraggedComponentId('__NEW_COMPONENT__');
+  };
+
   const handleComponentDrop = (e: React.DragEvent, targetId: string, moduleId: string, position: DragPosition | 'at_index', index?: number) => {
       e.preventDefault();
       e.stopPropagation();
       setDragOverInfo(null);
       
-      if (!draggedComponentId || draggedComponentId === targetId) {
+      const sidebarData = e.dataTransfer.getData('application/vst-component');
+
+      if (!sidebarData && (!draggedComponentId || draggedComponentId === targetId)) {
           setDraggedComponentId(null);
           return;
       }
@@ -761,38 +792,61 @@ export default function App() {
       setModules(prev => prev.map(m => {
           if (m.id !== moduleId || !m.layout) return m;
 
-          const targetNode = findComponent(m.layout, targetId);
+          let node: UIComponent | null = null;
+          let currentNodes = m.layout;
+
+          if (sidebarData) {
+               // Create New from Sidebar
+               const template = JSON.parse(sidebarData);
+               node = { ...template, id: generateId() };
+          } else if (draggedComponentId && draggedComponentId !== '__NEW_COMPONENT__') {
+               // Move Existing
+               const { node: removedNode, newNodes } = removeNode(m.layout, draggedComponentId);
+               if (!removedNode) return m;
+               node = removedNode;
+               currentNodes = newNodes;
+          }
+
+          if (!node) return m;
+
+          // Handle Drop to Root of Empty Module
+          if (targetId === 'ROOT') {
+              return { ...m, layout: [...currentNodes, node] };
+          }
+
+          const targetNode = findComponent(currentNodes, targetId);
           const isTargetContainer = targetNode && (targetNode.type === 'SECTION' || targetNode.type === 'RACK');
           
-          // 1. If dropping 'inside' a leaf node (e.g., Knob, Slider), GROUP them.
-          if (position === 'inside' && !isTargetContainer && targetNode) {
-               const { node, newNodes } = removeNode(m.layout, draggedComponentId);
-               if (!node) return m;
+          // Grouping Logic
+          const isInsideDrop = position.toString().startsWith('inside');
+          
+          if (isInsideDrop && !isTargetContainer && targetNode) {
+               // Determine direction based on inside position
+               const isVertical = position === 'inside-top' || position === 'inside-bottom';
+               const isFirst = position === 'inside-top' || position === 'inside-left';
+
+               const firstNode = isFirst ? node : targetNode;
+               const secondNode = isFirst ? targetNode : node;
 
                // Create Group wrapping both
                const newGroup: UIComponent = {
                    id: generateId(),
                    type: 'SECTION',
                    label: 'Group',
-                   children: [targetNode, node],
+                   children: [firstNode!, secondNode!],
                    colSpan: targetNode.colSpan || 1,
                    sectionVariant: 'minimal',
-                   layoutDirection: 'row', // Default to side-by-side stacking
-                   gridCols: 4
+                   layoutDirection: isVertical ? 'column' : 'row', 
+                   gridCols: isVertical ? 1 : 4 // Create vertical stack by restricting to 1 column
                };
                
-               // Replace targetNode with newGroup in tree
-               // We need to use the newNodes tree (where 'node' is already removed)
-               const finalLayout = replaceNode(newNodes, targetId, newGroup);
+               const finalLayout = replaceNode(currentNodes, targetId, newGroup);
                return { ...m, layout: finalLayout };
           }
 
-          const parent = findParent(m.layout, targetId);
+          const parent = findParent(currentNodes, targetId);
           const parentIsRack = parent?.type === 'RACK';
           
-          const { node, newNodes } = removeNode(m.layout, draggedComponentId);
-          if (!node) return m;
-
           // Auto-Grouping Logic for Racks (Side-by-side)
           if (parentIsRack && (position === 'left' || position === 'right')) {
                const swapNodes = (list: UIComponent[]): UIComponent[] => {
@@ -802,8 +856,8 @@ export default function App() {
                                return { 
                                    ...n, 
                                    children: position === 'left' 
-                                       ? [node, ...(n.children || [])]
-                                       : [...(n.children || []), node]
+                                       ? [node!, ...(n.children || [])]
+                                       : [...(n.children || []), node!]
                                };
                            }
                            return {
@@ -813,14 +867,14 @@ export default function App() {
                                colSpan: 1,
                                layoutDirection: 'row',
                                sectionVariant: 'minimal',
-                               children: position === 'left' ? [node, n] : [n, node]
+                               children: position === 'left' ? [node!, n] : [n, node!]
                            };
                        }
                        if (n.children) return { ...n, children: swapNodes(n.children) };
                        return n;
                    });
                }
-               return { ...m, layout: swapNodes(newNodes) };
+               return { ...m, layout: swapNodes(currentNodes) };
           }
 
           let insertPos: 'before' | 'after' | 'inside' | 'at_index' = 'inside';
@@ -829,7 +883,7 @@ export default function App() {
           else if (position === 'right' || position === 'bottom') insertPos = 'after';
           else insertPos = 'inside'; 
 
-          const finalNodes = insertNode(newNodes, targetId, node, insertPos, index);
+          const finalNodes = insertNode(currentNodes, targetId, node, insertPos, index);
           return { ...m, layout: finalNodes };
       }));
       
@@ -1009,13 +1063,13 @@ export default function App() {
                     <div className="space-y-3">
                         <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block">Architecture Template</label>
                         <div className="grid grid-cols-2 gap-2">
-                            {[PluginType.VISUAL_EQ, PluginType.MULTIBAND, PluginType.COMPRESSOR, PluginType.SATURATION, PluginType.SHINE, PluginType.HYBRID_EQ_DYN, PluginType.REVERB, PluginType.DELAY].map(type => (
+                            {[PluginType.VISUAL_EQ, PluginType.MULTIBAND, PluginType.COMPRESSOR, PluginType.SATURATION, PluginType.SHINE, PluginType.HYBRID_EQ_DYN, PluginType.REVERB, PluginType.DELAY, PluginType.STEREO_IMAGER, PluginType.CHORUS, PluginType.DOUBLER, PluginType.FLANGER].map(type => (
                                 <button 
                                 key={type}
                                 onClick={() => addModule(type)}
-                                className="text-xs font-medium text-left px-3 py-3 bg-[#0a0a0a] border border-white/5 rounded-sm hover:border-cyan-500/30 transition-all"
+                                className="text-xs font-medium text-left px-3 py-3 bg-[#0a0a0a] border border-white/5 rounded-sm hover:border-cyan-500/30 transition-all group"
                                 >
-                                    <span className="text-neutral-400 hover:text-cyan-400">{type.replace('Visual ', '')}</span>
+                                    <span className="text-neutral-400 group-hover:text-cyan-400 transition-colors">{type.replace('Visual ', '')}</span>
                                 </button>
                             ))}
                         </div>
@@ -1076,7 +1130,7 @@ export default function App() {
                                                                 key={span}
                                                                 onClick={() => updateComponent(activeModule.id, activeComponent.id, { colSpan: span })}
                                                                 className={`h-6 border rounded text-[10px] font-bold flex items-center justify-center transition-all
-                                                                    ${(activeComponent.colSpan || 1) === span 
+                                                                    {(activeComponent.colSpan || 1) === span 
                                                                         ? 'bg-white text-black border-white' 
                                                                         : 'bg-black border-white/10 text-neutral-500 hover:border-white/30'}
                                                                 `}
@@ -1285,6 +1339,16 @@ export default function App() {
                                             <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block">Add Elements</label>
                                             <div className="grid grid-cols-3 gap-2">
                                                 <button 
+                                                    draggable
+                                                    onDragStart={(e) => handleSidebarDragStart(e, {
+                                                        type: 'KNOB',
+                                                        label: 'Knob',
+                                                        paramId: 'output',
+                                                        color: activeModule.color,
+                                                        style: 'classic',
+                                                        size: 56,
+                                                        colSpan: 1
+                                                    })}
                                                     onClick={() => addComponentToLayout(activeModule.id, {
                                                         id: generateId(),
                                                         type: 'KNOB',
@@ -1301,6 +1365,16 @@ export default function App() {
                                                     <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Knob</span>
                                                 </button>
                                                 <button 
+                                                    draggable
+                                                    onDragStart={(e) => handleSidebarDragStart(e, {
+                                                        type: 'SLIDER',
+                                                        label: 'Fader',
+                                                        paramId: 'output',
+                                                        color: activeModule.color,
+                                                        style: 'classic',
+                                                        colSpan: 1,
+                                                        orientation: 'vertical'
+                                                    })}
                                                     onClick={() => addComponentToLayout(activeModule.id, {
                                                         id: generateId(),
                                                         type: 'SLIDER',
@@ -1317,6 +1391,15 @@ export default function App() {
                                                     <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Slider</span>
                                                 </button>
                                                 <button 
+                                                    draggable
+                                                    onDragStart={(e) => handleSidebarDragStart(e, {
+                                                        type: 'SWITCH',
+                                                        label: 'Switch',
+                                                        paramId: 'output',
+                                                        color: activeModule.color,
+                                                        style: 'classic',
+                                                        colSpan: 1
+                                                    })}
                                                     onClick={() => addComponentToLayout(activeModule.id, {
                                                         id: generateId(),
                                                         type: 'SWITCH',
@@ -1334,6 +1417,16 @@ export default function App() {
                                             </div>
                                             <div className="grid grid-cols-3 gap-2 mt-2">
                                                 <button 
+                                                    draggable
+                                                    onDragStart={(e) => handleSidebarDragStart(e, {
+                                                        type: 'SECTION',
+                                                        label: 'Group',
+                                                        color: '#ffffff',
+                                                        colSpan: 4,
+                                                        sectionVariant: 'minimal',
+                                                        layoutDirection: 'row',
+                                                        children: []
+                                                    })}
                                                     onClick={() => addComponentToLayout(activeModule.id, {
                                                         id: generateId(),
                                                         type: 'SECTION',
@@ -1350,6 +1443,16 @@ export default function App() {
                                                     <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Row/Group</span>
                                                 </button>
                                                 <button 
+                                                    draggable
+                                                    onDragStart={(e) => handleSidebarDragStart(e, {
+                                                        type: 'RACK',
+                                                        label: 'Rack',
+                                                        colSpan: 1,
+                                                        rackSplits: 4,
+                                                        rackVariant: 'industrial',
+                                                        height: 400,
+                                                        children: []
+                                                    })}
                                                     onClick={() => addComponentToLayout(activeModule.id, {
                                                         id: generateId(),
                                                         type: 'RACK',
@@ -1366,6 +1469,12 @@ export default function App() {
                                                     <span className="text-[10px] font-bold text-neutral-400 group-hover:text-white">Rack</span>
                                                 </button>
                                                 <button 
+                                                    draggable
+                                                    onDragStart={(e) => handleSidebarDragStart(e, {
+                                                        type: 'SCREW',
+                                                        label: 'Screw',
+                                                        colSpan: 1
+                                                    })}
                                                     onClick={() => addComponentToLayout(activeModule.id, {
                                                         id: generateId(),
                                                         type: 'SCREW',
@@ -1482,35 +1591,76 @@ export default function App() {
                             <div 
                                 key={module.id} 
                                 onClick={() => selectForSidebar(module.id)}
-                                className={`bg-[#080808] rounded border transition-all relative overflow-hidden
+                                className={`bg-[#080808] rounded border transition-all relative overflow-hidden group
                                     ${selectedModuleId === module.id ? 'border-cyan-500/30 shadow-lg shadow-cyan-900/10' : 'border-white/5 hover:border-white/10'}
-                                    ${module.selected ? 'ring-2 ring-amber-500/50 border-amber-500/50' : ''}
+                                    ${module.selected ? 'ring-1 ring-amber-500 border-amber-500' : ''}
                                 `}
                             >
                                 <div className="h-10 flex items-center justify-between px-4 border-b border-white/5 bg-white/[0.01]">
                                     <div className="flex items-center space-x-3">
-                                        <button onClick={(e) => {e.stopPropagation(); toggleBypass(module.id)}} className={`w-2.5 h-2.5 rounded-full ${module.enabled ? 'shadow-[0_0_8px_currentColor]' : 'bg-neutral-800'}`} style={{ backgroundColor: module.enabled ? module.color : '' }} />
-                                        <span className="text-[11px] font-bold text-gray-300 tracking-widest uppercase">{module.title || module.type}</span>
+                                        <button onClick={(e) => {e.stopPropagation(); toggleBypass(module.id)}} className={`w-2.5 h-2.5 rounded-full transition-all ${module.enabled ? 'shadow-[0_0_8px_currentColor] scale-110' : 'bg-neutral-800 hover:bg-neutral-700'}`} style={{ backgroundColor: module.enabled ? module.color : '' }} title={module.enabled ? "Bypass" : "Enable"} />
+                                        <span className="text-[11px] font-bold text-gray-300 tracking-widest uppercase truncate max-w-[150px]">{module.title || module.type}</span>
                                     </div>
+                                    
                                     {appMode === 'ARCHITECT' && (
-                                        <div className="flex items-center space-x-2 z-20">
-                                             <button onClick={(e) => { e.stopPropagation(); toggleSelection(module.id); }} className={`text-[10px] uppercase tracking-wider font-bold px-2 py-1 rounded border transition-colors ${module.selected ? 'bg-amber-500 text-black border-amber-500' : 'border-white/10 text-neutral-400 hover:bg-white/10'}`}>
-                                                 {module.selected ? <Check size={12}/> : 'Select'}
+                                        <div className="flex items-center space-x-1 z-20 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                                             <button 
+                                                onClick={(e) => { e.stopPropagation(); toggleSelection(module.id); }} 
+                                                className={`
+                                                    h-6 px-2 rounded-sm flex items-center space-x-1.5 text-[9px] font-bold uppercase tracking-wider transition-all border
+                                                    ${module.selected 
+                                                        ? 'bg-amber-500 text-black border-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.3)]' 
+                                                        : 'bg-transparent border-white/10 text-neutral-500 hover:text-white hover:border-white/30 hover:bg-white/5'}
+                                                `}
+                                             >
+                                                 {module.selected ? <Check size={10} strokeWidth={3} /> : <div className="w-2 h-2 rounded-full border border-current opacity-60" />}
+                                                 <span>{module.selected ? 'Selected' : 'Select'}</span>
                                              </button>
-                                             <button onClick={(e) => { e.stopPropagation(); removeModule(module.id); }} className="text-neutral-700 hover:text-red-500 p-1"><X size={12} /></button>
+
+                                             <button 
+                                                onClick={(e) => { e.stopPropagation(); removeModule(module.id); }}
+                                                className="h-6 w-6 flex items-center justify-center rounded-sm text-neutral-600 hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                                                title="Remove Module"
+                                             >
+                                                 <Trash2 size={12} />
+                                             </button>
                                         </div>
                                     )}
+                                    
+                                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/[0.02] to-transparent opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity"></div>
                                 </div>
 
-                                <div className="p-6">
-                                    <div className="grid grid-cols-4 gap-4 items-start">
-                                        {module.layout ? module.layout.map((comp, i) => (
-                                            <RenderComponent key={comp.id} component={comp} module={module} index={i} ctx={designerContext} />
-                                        )) : (
-                                            <div className="col-span-4 text-center text-neutral-600 text-xs">No layout defined</div>
+                                {/* Module Content */}
+                                {!module.collapsed && (
+                                    <div className="p-4 bg-[#0a0a0a] relative min-h-[100px]">
+                                        {module.layout && module.layout.length > 0 ? (
+                                            <div className="grid grid-cols-4 gap-4">
+                                                {module.layout.map((comp, i) => (
+                                                    <RenderComponent key={comp.id} component={comp} module={module} index={i} ctx={designerContext} />
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <div 
+                                                className={`w-full h-32 border-2 border-dashed rounded flex items-center justify-center transition-colors
+                                                    ${dragOverInfo?.id === `module-${module.id}-root` ? 'border-cyan-500 bg-cyan-900/10' : 'border-white/10 text-neutral-600'}
+                                                `}
+                                                onDragOver={(e) => {
+                                                    e.preventDefault();
+                                                    if (appMode === 'DESIGNER') {
+                                                        setDragOverInfo({ id: `module-${module.id}-root`, position: 'inside' });
+                                                    }
+                                                }}
+                                                onDrop={(e) => {
+                                                    if (appMode === 'DESIGNER') {
+                                                        handleComponentDrop(e, 'ROOT', module.id, 'at_index', 0);
+                                                    }
+                                                }}
+                                            >
+                                                <span className="text-xs font-bold uppercase tracking-widest">Drag components here</span>
+                                            </div>
                                         )}
                                     </div>
-                                </div>
+                                )}
                             </div>
                         ))}
                      </div>
@@ -1518,21 +1668,48 @@ export default function App() {
              )}
              
              {modules.length === 0 && (
-                 <div className="h-full flex flex-col items-center justify-center text-neutral-500">
-                     <Box size={48} className="mb-4 opacity-20"/>
-                     <p className="text-sm">Add a module from the architect panel to begin.</p>
+                 <div className="flex flex-col items-center justify-center h-full text-neutral-600 space-y-4">
+                     <Layers size={48} strokeWidth={1} />
+                     <p className="text-sm font-medium">Add a module from the sidebar to begin</p>
                  </div>
              )}
 
             {appMode === 'ENGINEER' && generatedCode && (
-                <div className="max-w-6xl mx-auto grid grid-cols-2 gap-6 h-[600px]">
-                    <div className="bg-[#080808] border border-white/5 rounded p-4 flex flex-col"><h3 className="text-xs font-bold text-neutral-400 mb-2">HEADER</h3><pre className="flex-1 overflow-auto text-[10px] font-mono text-neutral-400">{generatedCode.headerCode}</pre></div>
-                    <div className="bg-[#080808] border border-white/5 rounded p-4 flex flex-col"><h3 className="text-xs font-bold text-neutral-400 mb-2">SOURCE</h3><pre className="flex-1 overflow-auto text-[10px] font-mono text-cyan-100/80">{generatedCode.cppCode}</pre></div>
-                </div>
+                 <div className="max-w-5xl mx-auto h-full flex flex-col pb-20">
+                      <div className="bg-[#0a0a0a] border border-white/10 rounded-lg overflow-hidden flex-1 flex flex-col">
+                          <div className="h-10 bg-black/50 border-b border-white/5 flex items-center px-4 space-x-4">
+                               <div className="flex items-center space-x-2 text-neutral-400">
+                                   <Code size={14} />
+                                   <span className="text-xs font-bold uppercase">PluginProcessor.cpp</span>
+                               </div>
+                               <div className="flex-1"></div>
+                               <button className="text-[10px] font-bold uppercase text-cyan-500 hover:text-cyan-300 flex items-center space-x-1">
+                                   <Download size={12} />
+                                   <span>Download Source</span>
+                               </button>
+                          </div>
+                          <div className="flex-1 p-6 overflow-auto custom-scrollbar font-mono text-xs text-gray-300 leading-relaxed">
+                              <pre>{generatedCode.cppCode}</pre>
+                          </div>
+                      </div>
+                      <div className="mt-4 p-4 bg-[#0a0a0a] border border-white/10 rounded-lg">
+                           <h3 className="text-xs font-bold text-white uppercase mb-2">AI Explanation</h3>
+                           <p className="text-xs text-neutral-400 leading-relaxed">{generatedCode.explanation}</p>
+                      </div>
+                 </div>
             )}
         </div>
-
-        <Transport isPlaying={isPlaying} currentTime={currentTime} duration={duration} onPlayPause={() => {if(audioRef.current){ if(isPlaying) audioRef.current.pause(); else audioRef.current.play(); }}} onRestart={() => {if(audioRef.current) { audioRef.current.currentTime = 0; audioRef.current.play(); }}} onSeek={(t) => {if(audioRef.current) audioRef.current.currentTime = t;}} />
+        
+        <div className="absolute bottom-0 left-0 right-0">
+            <Transport 
+              isPlaying={isPlaying}
+              currentTime={currentTime}
+              duration={duration}
+              onPlayPause={() => isPlaying ? audioRef.current?.pause() : audioRef.current?.play()}
+              onRestart={() => { if(audioRef.current) audioRef.current.currentTime = 0; }}
+              onSeek={(t) => { if(audioRef.current) audioRef.current.currentTime = t; }}
+            />
+        </div>
       </div>
     </div>
   );

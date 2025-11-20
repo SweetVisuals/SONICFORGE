@@ -1,5 +1,4 @@
 
-
 import { PluginType, AudioParamConfig, PluginLayer, UIComponent } from './types';
 
 // Band Colors matching Fruity PEQ2 / FabFilter style
@@ -134,6 +133,51 @@ export const PLUGIN_DEFINITIONS: Record<PluginType, { params: AudioParamConfig[]
       { id: 'detune', name: 'Detune', value: 0, min: -100, max: 100, step: 1, unit: 'cts' },
       { id: 'gain', name: 'Level', value: 0.5, min: 0, max: 1, step: 0.01, unit: '' },
     ]
+  },
+  [PluginType.STEREO_IMAGER]: {
+    description: "Professional M/S Imaging Processor.",
+    defaultColor: "#8b5cf6", // Violet
+    icon: "move",
+    params: [
+      { id: 'width', name: 'Width', value: 100, min: 0, max: 250, step: 1, unit: '%' },
+      { id: 'asymmetry', name: 'Asymmetry', value: 0, min: -100, max: 100, step: 1, unit: '%' },
+      { id: 'rotation', name: 'Rotation', value: 0, min: -45, max: 45, step: 1, unit: '°' },
+      { id: 'pan', name: 'Pan', value: 0, min: -100, max: 100, step: 1, unit: 'L/R' },
+      { id: 'bassMono', name: 'Bass Mono', value: 100, min: 20, max: 500, step: 1, unit: 'Hz' },
+      { id: 'stereoize', name: 'Stereoize', value: 0, min: 0, max: 100, step: 1, unit: '%' },
+      { id: 'output', name: 'Output', value: 0, min: -24, max: 12, step: 0.1, unit: 'dB' }
+    ]
+  },
+  [PluginType.CHORUS]: {
+    description: "Modulated delay line for thickness.",
+    defaultColor: "#3b82f6", // Blue
+    icon: "copy",
+    params: [
+      { id: 'rate', name: 'Rate', value: 1.5, min: 0.1, max: 10, step: 0.1, unit: 'Hz' },
+      { id: 'depth', name: 'Depth', value: 0.002, min: 0, max: 0.01, step: 0.0001, unit: 's' },
+      { id: 'mix', name: 'Mix', value: 0.5, min: 0, max: 1, step: 0.01, unit: '' }
+    ]
+  },
+  [PluginType.DOUBLER]: {
+    description: "Stereo widening double tracker.",
+    defaultColor: "#14b8a6", // Teal
+    icon: "layers",
+    params: [
+      { id: 'spread', name: 'Spread', value: 20, min: 0, max: 50, step: 1, unit: 'ms' },
+      { id: 'detune', name: 'Detune', value: 10, min: 0, max: 50, step: 1, unit: 'cts' },
+      { id: 'mix', name: 'Mix', value: 0.5, min: 0, max: 1, step: 0.01, unit: '' }
+    ]
+  },
+  [PluginType.FLANGER]: {
+    description: "Jet plane comb filtering effect.",
+    defaultColor: "#f43f5e", // Rose
+    icon: "wind",
+    params: [
+      { id: 'rate', name: 'Rate', value: 0.5, min: 0.1, max: 5, step: 0.1, unit: 'Hz' },
+      { id: 'depth', name: 'Depth', value: 0.005, min: 0, max: 0.02, step: 0.0001, unit: 's' },
+      { id: 'feedback', name: 'Feedback', value: 0.5, min: 0, max: 0.95, step: 0.01, unit: '' },
+      { id: 'mix', name: 'Mix', value: 0.5, min: 0, max: 1, step: 0.01, unit: '' }
+    ]
   }
 };
 
@@ -164,6 +208,176 @@ export const createDefaultLayout = (type: PluginType, defaultColor: string, nest
         fontSize: 18,
         height: 40
     });
+
+    // Special Layout for Stereo Imager (Professional Layout)
+    if (type === PluginType.STEREO_IMAGER) {
+        // Top Visualizer - Full Width
+        layout.push({
+            id: Math.random().toString(36).substring(2, 9),
+            type: 'SECTION',
+            label: 'Goniometer',
+            colSpan: 4,
+            sectionVariant: 'solid',
+            children: [{
+                id: Math.random().toString(36).substring(2, 9),
+                type: 'VISUALIZER',
+                label: 'Vectorscope',
+                visualizerMode: 'VECTORSCOPE',
+                height: 300,
+                colSpan: 4
+            }]
+        });
+
+        // Main Control Deck
+        layout.push({
+             id: Math.random().toString(36).substring(2, 9),
+             type: 'SECTION',
+             label: 'Parameters',
+             colSpan: 4,
+             sectionVariant: 'card',
+             gridCols: 4,
+             children: [
+                 // Left Col: Width Control (Vertical Slider style)
+                 {
+                     id: Math.random().toString(36).substring(2, 9),
+                     type: 'SECTION',
+                     label: 'Stereo',
+                     colSpan: 1,
+                     sectionVariant: 'minimal',
+                     gridCols: 1, // Force 1 column for vertical stack
+                     children: [
+                        {
+                             id: Math.random().toString(36).substring(2, 9),
+                             type: 'SLIDER',
+                             label: 'Width',
+                             paramId: 'width',
+                             orientation: 'vertical',
+                             height: 200,
+                             color: '#8b5cf6',
+                             style: 'cyber',
+                             colSpan: 1
+                        }
+                     ]
+                 },
+                 // Middle Col: Fine Tuning (Rotations & Asymmetry)
+                 {
+                     id: Math.random().toString(36).substring(2, 9),
+                     type: 'SECTION',
+                     label: 'Focus',
+                     colSpan: 2,
+                     sectionVariant: 'minimal',
+                     gridCols: 2, // Split into 2 internal columns for layout
+                     children: [
+                         // Left internal col: Knob
+                         {
+                             id: Math.random().toString(36).substring(2, 9),
+                             type: 'SECTION',
+                             label: 'Filter',
+                             colSpan: 1,
+                             gridCols: 1,
+                             sectionVariant: 'minimal',
+                             children: [
+                                 {
+                                     id: Math.random().toString(36).substring(2, 9),
+                                     type: 'KNOB',
+                                     label: 'Bass Mono',
+                                     paramId: 'bassMono',
+                                     size: 60,
+                                     color: '#f472b6',
+                                     style: 'tech',
+                                     colSpan: 1
+                                 }
+                             ]
+                         },
+                         // Right internal col: Sliders
+                         {
+                             id: Math.random().toString(36).substring(2, 9),
+                             type: 'SECTION',
+                             label: 'Geometry',
+                             colSpan: 1,
+                             gridCols: 1,
+                             sectionVariant: 'minimal',
+                             children: [
+                                 {
+                                     id: Math.random().toString(36).substring(2, 9),
+                                     type: 'SLIDER',
+                                     label: 'Asymmetry',
+                                     paramId: 'asymmetry',
+                                     orientation: 'horizontal',
+                                     style: 'analog',
+                                     color: '#ffffff',
+                                     colSpan: 1
+                                 },
+                                 {
+                                     id: Math.random().toString(36).substring(2, 9),
+                                     type: 'SLIDER',
+                                     label: 'Rotation',
+                                     paramId: 'rotation',
+                                     orientation: 'horizontal',
+                                     style: 'analog',
+                                     color: '#ffffff',
+                                     colSpan: 1
+                                 }
+                             ]
+                         }
+                     ]
+                 },
+                 // Right Col: Output & Effect
+                 {
+                     id: Math.random().toString(36).substring(2, 9),
+                     type: 'SECTION',
+                     label: 'Output',
+                     colSpan: 1,
+                     sectionVariant: 'minimal',
+                     gridCols: 1, // Force 1 column for vertical stack
+                     children: [
+                        {
+                             id: Math.random().toString(36).substring(2, 9),
+                             type: 'SECTION',
+                             label: 'FX',
+                             colSpan: 1,
+                             layoutDirection: 'row',
+                             sectionVariant: 'minimal',
+                             children: [
+                                {
+                                     id: Math.random().toString(36).substring(2, 9),
+                                     type: 'KNOB',
+                                     label: 'Stereoize',
+                                     paramId: 'stereoize',
+                                     size: 40,
+                                     color: '#22d3ee',
+                                     style: 'ring',
+                                     colSpan: 1
+                                },
+                                {
+                                     id: Math.random().toString(36).substring(2, 9),
+                                     type: 'KNOB',
+                                     label: 'Pan',
+                                     paramId: 'pan',
+                                     size: 40,
+                                     color: '#94a3b8',
+                                     style: 'classic',
+                                     colSpan: 1
+                                }
+                             ]
+                        },
+                        {
+                             id: Math.random().toString(36).substring(2, 9),
+                             type: 'SLIDER',
+                             label: 'Gain',
+                             paramId: 'output',
+                             orientation: 'vertical',
+                             height: 100,
+                             color: '#ffffff',
+                             style: 'classic',
+                             colSpan: 1
+                        }
+                     ]
+                 }
+             ]
+        });
+        return layout;
+    }
 
     // 2. Add Visualizer for supported types
     if (type === PluginType.VISUAL_EQ || type === PluginType.HYBRID_EQ_DYN || type === PluginType.SHINE) {

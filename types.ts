@@ -1,4 +1,5 @@
 
+
 export enum PluginType {
   VISUAL_EQ = 'Parametric EQ 2',
   MULTIBAND = 'Pro Multiband',
@@ -8,7 +9,11 @@ export enum PluginType {
   DELAY = 'Delay',
   OSCILLATOR = 'Oscillator',
   SHINE = 'Shine Processor',
-  HYBRID_EQ_DYN = 'Smart Hybrid'
+  HYBRID_EQ_DYN = 'Smart Hybrid',
+  STEREO_IMAGER = 'Stereo Imager',
+  CHORUS = 'Chorus',
+  DOUBLER = 'Doubler',
+  FLANGER = 'Flanger'
 }
 
 export enum PluginLayer {
@@ -23,7 +28,7 @@ export enum PluginLayer {
 export type SaturationMode = 'TUBE' | 'TAPE' | 'DIGITAL' | 'FUZZ' | 'RECTIFY';
 export type ShineMode = 'AIR' | 'CRYSTAL' | 'SHIMMER' | 'GLOSS' | 'ANGELIC';
 
-export type VisualizerMode = 'SPECTRUM' | 'WAVEFORM' | 'SPECTROGRAM';
+export type VisualizerMode = 'SPECTRUM' | 'WAVEFORM' | 'SPECTROGRAM' | 'VECTORSCOPE';
 
 export interface AudioParamConfig {
   id: string;
@@ -75,6 +80,9 @@ export interface UIComponent {
   orientation?: 'vertical' | 'horizontal';
 
   visibleOnLayer?: PluginLayer; // Only show if activeLayer matches
+
+  // Visualizer Specific
+  visualizerMode?: VisualizerMode;
 }
 
 export interface PluginModuleState {

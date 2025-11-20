@@ -1,4 +1,5 @@
 
+
 import React, { useEffect, useRef } from 'react';
 import { audioEngine } from '../services/audioEngine';
 import { VisualizerMode } from '../types';
@@ -25,6 +26,11 @@ export const Visualizer: React.FC<VisualizerProps> = ({ mode }) => {
     const analyzer = audioEngine.getAnalyzer();
     const bufferLength = analyzer.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
+    
+    // Stereo Arrays for Vectorscope
+    const { l: analyzerL, r: analyzerR } = audioEngine.getStereoAnalyzers();
+    const dataArrayL = new Uint8Array(analyzerL.frequencyBinCount);
+    const dataArrayR = new Uint8Array(analyzerR.frequencyBinCount);
 
     let animationId: number;
 
@@ -99,50 +105,25 @@ export const Visualizer: React.FC<VisualizerProps> = ({ mode }) => {
       } else if (mode === 'SPECTROGRAM') {
           analyzer.getByteFrequencyData(dataArray);
           
-          // 1. Shift existing canvas content 1px to the left
-          // We use drawImage with the canvas itself. 
-          // Note: We are drawing unscaled pixels for the shift to be crisp, then mapping to rect.
-          
-          // Use the temp canvas to buffer the current state
           const tempCtx = tempCanvasRef.current?.getContext('2d');
           if (tempCtx && tempCanvasRef.current) {
-              // Sync temp canvas size
               if (tempCanvasRef.current.width !== canvas.width) {
                    tempCanvasRef.current.width = canvas.width;
                    tempCanvasRef.current.height = canvas.height;
               }
-              
-              // Copy current canvas to temp
               tempCtx.drawImage(canvas, 0, 0);
-              
-              // Draw temp back to canvas, shifted left
-              // We need to bypass the scale(dpr, dpr) for direct pixel manipulation, 
-              // so we reset transform, draw, then re-apply scale.
               ctx.save();
               ctx.setTransform(1, 0, 0, 1, 0, 0);
-              ctx.drawImage(tempCanvasRef.current, -2 * dpr, 0); // Shift speed
+              ctx.drawImage(tempCanvasRef.current, -2 * dpr, 0);
               ctx.restore();
           }
 
-          // 2. Draw new column at the right edge
           const colWidth = 2;
           const x = rect.width - colWidth;
           
-          // Draw frequency bins vertically
-          // We effectively need to squash the bufferLength into rect.height
-          const binHeight = rect.height / bufferLength;
-          
-          // Optimization: Draw smaller chunks to avoid thousands of rect calls?
-          // Actually, simpler to draw a gradient strip
-          
-          // Let's construct an ImageData or just draw rects. Rects are easier for React.
           for (let i = 0; i < bufferLength; i++) {
               const value = dataArray[i];
-              const y = rect.height - (i * (rect.height / bufferLength)); // Low freq at bottom
-              
-              // Color Map: Black -> Blue -> Purple -> Orange -> White
-              const hue = 240 - (value / 255) * 240; // Blue(240) to Red(0)
-              const lightness = (value / 255) * 50;
+              const hue = 240 - (value / 255) * 240;
               const alpha = value / 255;
               
               if (value > 10) {
@@ -150,6 +131,87 @@ export const Visualizer: React.FC<VisualizerProps> = ({ mode }) => {
                   ctx.fillRect(x, rect.height - (i * (rect.height/128)), colWidth, (rect.height/128) + 1);
               }
           }
+      } else if (mode === 'VECTORSCOPE') {
+          analyzerL.getByteTimeDomainData(dataArrayL);
+          analyzerR.getByteTimeDomainData(dataArrayR);
+          
+          // Fade for trail
+          ctx.fillStyle = 'rgba(5, 5, 5, 0.25)';
+          ctx.fillRect(0, 0, rect.width, rect.height);
+
+          // Center
+          const cx = rect.width / 2;
+          const cy = rect.height / 2;
+          const radius = Math.min(rect.width, rect.height) * 0.4;
+
+          // Grid
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          
+          // Concentric Circles
+          ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.arc(cx, cy, radius * 0.66, 0, Math.PI * 2);
+          ctx.arc(cx, cy, radius * 0.33, 0, Math.PI * 2);
+          ctx.stroke();
+          
+          // Crosshairs / Diagonals
+          ctx.beginPath();
+          ctx.moveTo(cx - radius, cy + radius); // 45 deg lines
+          ctx.lineTo(cx + radius, cy - radius);
+          ctx.moveTo(cx - radius, cy - radius);
+          ctx.lineTo(cx + radius, cy + radius);
+          
+          ctx.moveTo(cx, cy - radius); // Vertical
+          ctx.lineTo(cx, cy + radius);
+          ctx.stroke();
+          
+          // Labels
+          ctx.fillStyle = '#52525b';
+          ctx.font = '9px Inter';
+          ctx.textAlign = 'center';
+          ctx.fillText('L', cx - radius - 10, cy - radius + 10);
+          ctx.fillText('R', cx + radius + 10, cy - radius + 10);
+          ctx.fillText('M', cx, cy - radius - 5);
+          ctx.fillText('S', cx + radius + 5, cy);
+
+          // Draw Scope
+          ctx.lineWidth = 1.5;
+          // Using lighter blend mode for glowing intersection
+          ctx.globalCompositeOperation = 'screen';
+          ctx.strokeStyle = '#8b5cf6'; // Violet matches the plugin color
+          
+          ctx.beginPath();
+          
+          // Optimized drawing
+          const scale = radius;
+          
+          for (let i = 0; i < analyzerL.frequencyBinCount; i += 2) {
+              const l = (dataArrayL[i] - 128) / 128.0;
+              const r = (dataArrayR[i] - 128) / 128.0;
+              
+              // Goniometer Projection
+              // X = Side = (L - R) * 0.707 
+              // Y = Mid  = (L + R) * 0.707
+              // But screen Y is inverted
+              
+              const side = (l - r) * 0.707;
+              const mid = (l + r) * 0.707;
+              
+              const x = cx + side * scale;
+              const y = cy - mid * scale;
+              
+              if (i === 0) ctx.moveTo(x, y);
+              else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+          
+          // Second brighter pass for core
+          ctx.strokeStyle = 'rgba(167, 139, 250, 0.4)';
+          ctx.lineWidth = 3;
+          ctx.stroke();
+          
+          ctx.globalCompositeOperation = 'source-over';
       }
     };
 
@@ -161,7 +223,7 @@ export const Visualizer: React.FC<VisualizerProps> = ({ mode }) => {
   return (
     <canvas 
       ref={canvasRef} 
-      className="w-full h-48 rounded-lg border border-gray-800 bg-[#050505] shadow-inner"
+      className="w-full h-full rounded-lg bg-[#050505] shadow-inner"
     />
   );
 };
