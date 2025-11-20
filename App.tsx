@@ -381,7 +381,7 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
             )}
 
             {component.type === 'KNOB' && component.paramId && (
-                <div className="p-1 pointer-events-none">
+                <div className={`p-1 ${ctx.appMode === 'DESIGNER' ? 'pointer-events-none' : ''}`}>
                   <Knob
                       label={component.label}
                       value={module.params[component.paramId] !== undefined ? module.params[component.paramId] : 0}
@@ -397,7 +397,7 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
             )}
 
             {component.type === 'SLIDER' && component.paramId && (
-                <div className="p-2 h-full flex items-center justify-center w-full pointer-events-none">
+                <div className={`p-2 h-full flex items-center justify-center w-full ${ctx.appMode === 'DESIGNER' ? 'pointer-events-none' : ''}`}>
                   <Slider
                       label={component.label}
                       value={module.params[component.paramId] !== undefined ? module.params[component.paramId] : 0}
@@ -413,7 +413,7 @@ const RenderComponent: React.FC<{ component: UIComponent, module: PluginModuleSt
             )}
 
             {component.type === 'SWITCH' && component.paramId && (
-                <div className="p-1 w-full h-full flex items-center justify-center pointer-events-none">
+                <div className={`p-1 w-full h-full flex items-center justify-center ${ctx.appMode === 'DESIGNER' ? 'pointer-events-none' : ''}`}>
                   <Switch
                       label={component.label}
                       value={module.params[component.paramId] !== undefined ? module.params[component.paramId] : 0}
